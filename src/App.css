@@ -1,0 +1,2 @@
+/* App-level resets — component-specific styles live alongside each component */
+.App { min-height: 100vh; }
