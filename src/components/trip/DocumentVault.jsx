@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { FileText, Plus, Trash2, ExternalLink, Link } from 'lucide-react';
+import { FileText, Plus, Trash2, Edit3, Link } from 'lucide-react';
 import { useTripContext } from '../../context/TripContext';
-import { addDocument, deleteDocument } from '../../services/trip.service';
+import { addDocument, updateDocumentItem, deleteDocument } from '../../services/trip.service';
 import { useAuth } from '../../context/AuthContext';
 import Button from '../ui/Button';
 import Modal from '../ui/Modal';
 import Badge from '../ui/Badge';
+import SegmentedDateInput, { dmyToYmd, ymdToDmy } from '../ui/SegmentedDateInput';
 
 const DOC_TYPES = [
   { value: 'visa', label: 'Visa', color: 'violet' },
@@ -18,6 +19,7 @@ const DOC_TYPES = [
 
 const typeColor = (type) => DOC_TYPES.find((d) => d.value === type)?.color || 'gray';
 
+
 /**
  * DocumentVault — store links to travel documents with categorization.
  */
@@ -26,25 +28,88 @@ const DocumentVault = () => {
   const { user } = useAuth();
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: '', type: 'visa', url: '', holder: '', expiryDate: '', notes: '' });
+  const [editingId, setEditingId] = useState(null);
+  const [formError, setFormError] = useState('');
+  const [form, setForm] = useState({
+    name: '',
+    type: 'visa',
+    url: '',
+    holder: '',
+    expiryDate: '',      // canonical ISO "YYYY-MM-DD"
+    expiryDateInput: '', // UI "DD-MM-YYYY"
+    notes: '',
+  });
 
   const handleChange = (e) => {
     const { name, value } = e.target;
+    setFormError('');
     setForm((p) => ({ ...p, [name]: value }));
   };
 
-  const handleAdd = async () => {
-    if (!form.name) return;
+  const resetForm = () => {
+    setForm({ name: '', type: 'visa', url: '', holder: '', expiryDate: '', expiryDateInput: '', notes: '' });
+    setEditingId(null);
+    setFormError('');
+  };
+
+  const openAddModal = () => {
+    resetForm();
+    setModalOpen(true);
+  };
+
+  const openEditModal = (doc) => {
+    setEditingId(doc.id);
+    setFormError('');
+    setForm({
+      name: doc.name || '',
+      type: doc.type || 'visa',
+      url: doc.url || '',
+      holder: doc.holder || '',
+      expiryDate: doc.expiryDate || '',
+      expiryDateInput: ymdToDmy(doc.expiryDate || ''),
+      notes: doc.notes || '',
+    });
+    setModalOpen(true);
+  };
+
+  const handleSave = async () => {
+    const name = String(form.name || '').trim();
+    const holder = String(form.holder || '').trim();
+    const notes = String(form.notes || '').trim();
+    const type = String(form.type || '').trim();
+    const expiryDate = String(form.expiryDate || '').trim();
+    const url = String(form.url || '').trim();
+
+    // All fields mandatory; URL required
+    if (!name) { setFormError('Document Name is required.'); return; }
+    if (!type) { setFormError('Type is required.'); return; }
+    if (!holder) { setFormError('Holder / Owner is required.'); return; }
+    if (!expiryDate) { setFormError('Expiry Date is required (DD-MM-YYYY).'); return; }
+    if (!notes) { setFormError('Notes are required.'); return; }
+    if (!url) { setFormError('Document URL is required.'); return; }
+
     setSaving(true);
     try {
-      const ref = await addDocument(activeTrip.id, {
-        ...form,
+      const docPayload = {
+        name,
+        type,
+        holder,
+        expiryDate,
+        notes,
+        url,
         addedBy: user?.uid,
         addedByName: user?.displayName || 'Unknown',
-      });
-      setDocuments((prev) => [...prev, { id: ref.id, ...form }]);
+      };
+
+      if (editingId) {
+        await updateDocumentItem(activeTrip.id, editingId, docPayload);
+        setDocuments((prev) => prev.map((d) => (d.id === editingId ? { ...d, ...docPayload } : d)));
+      } else {
+        const ref = await addDocument(activeTrip.id, docPayload);
+        setDocuments((prev) => [...prev, { id: ref.id, ...docPayload }]);
+      }
       setModalOpen(false);
-      setForm({ name: '', type: 'visa', url: '', holder: '', expiryDate: '', notes: '' });
+      resetForm();
     } finally {
       setSaving(false);
     }
@@ -71,7 +136,7 @@ const DocumentVault = () => {
           </span>
           Document Vault
         </div>
-        <Button variant="primary" size="sm" icon={Plus} onClick={() => setModalOpen(true)} id="doc-add-btn">
+        <Button variant="primary" size="sm" icon={Plus} onClick={openAddModal} id="doc-add-btn">
           Add Document
         </Button>
       </div>
@@ -92,11 +157,9 @@ const DocumentVault = () => {
                   <div className="doc-card-top">
                     <Badge variant={typeColor(doc.type)}>{doc.type}</Badge>
                     <div style={{ display: 'flex', gap: '0.3rem' }}>
-                      {doc.url && (
-                        <a href={doc.url} target="_blank" rel="noopener noreferrer" className="icon-btn" id={`doc-open-${doc.id}`}>
-                          <ExternalLink size={13} />
-                        </a>
-                      )}
+                      <button className="icon-btn" onClick={() => openEditModal(doc)} id={`doc-edit-${doc.id}`}>
+                        <Edit3 size={13} />
+                      </button>
                       <button className="icon-btn danger" onClick={() => handleDelete(doc)} id={`doc-del-${doc.id}`}>
                         <Trash2 size={13} />
                       </button>
@@ -108,9 +171,7 @@ const DocumentVault = () => {
                   {doc.url && (
                     <p className="doc-link">
                       <Link size={11} />
-                      <a href={doc.url} target="_blank" rel="noopener noreferrer">
-                        {doc.url.length > 40 ? doc.url.slice(0, 40) + '…' : doc.url}
-                      </a>
+                      <span>{doc.url.length > 40 ? doc.url.slice(0, 40) + '…' : doc.url}</span>
                     </p>
                   )}
                   {doc.notes && <p className="doc-notes">{doc.notes}</p>}
@@ -123,42 +184,69 @@ const DocumentVault = () => {
 
       <Modal
         isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        title="Add Document"
-        subtitle="Add a link or reference to a travel document"
+        onClose={() => { setModalOpen(false); resetForm(); }}
+        title={editingId ? 'Edit Document' : 'Add Document'}
+        subtitle={editingId ? 'Update this travel document' : 'Add a link or reference to a travel document'}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button variant="primary" loading={saving} onClick={handleAdd} id="doc-save-btn">Add Document</Button>
+            <Button variant="ghost" onClick={() => { setModalOpen(false); resetForm(); }}>Cancel</Button>
+            <Button variant="primary" loading={saving} onClick={handleSave} id="doc-save-btn">
+              {editingId ? 'Save Changes' : 'Add Document'}
+            </Button>
           </>
         }
       >
+        {formError && (
+          <div
+            role="alert"
+            style={{
+              marginBottom: '1rem',
+              background: 'rgba(239,68,68,0.1)',
+              border: '1px solid rgba(239,68,68,0.25)',
+              borderRadius: 'var(--radius-md)',
+              padding: '0.75rem 0.9rem',
+              color: 'var(--coral-400)',
+              fontSize: '0.85rem',
+            }}
+          >
+            {formError}
+          </div>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
           <div className="form-group" style={{ gridColumn: '1/-1' }}>
             <label className="form-label">Document Name *</label>
-            <input name="name" value={form.name} onChange={handleChange} className="form-input" placeholder="e.g. John's US Visa" />
+            <input name="name" value={form.name} onChange={handleChange} className="form-input" placeholder="e.g. John's US Visa" required />
           </div>
           <div className="form-group">
-            <label className="form-label">Type</label>
-            <select name="type" value={form.type} onChange={handleChange} className="form-input">
+            <label className="form-label">Type *</label>
+            <select name="type" value={form.type} onChange={handleChange} className="form-input" required>
               {DOC_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
           </div>
           <div className="form-group">
-            <label className="form-label">Holder / Owner</label>
-            <input name="holder" value={form.holder} onChange={handleChange} className="form-input" placeholder="Person this belongs to" />
+            <label className="form-label">Holder / Owner *</label>
+            <input name="holder" value={form.holder} onChange={handleChange} className="form-input" placeholder="Person this belongs to" required />
           </div>
           <div className="form-group" style={{ gridColumn: '1/-1' }}>
-            <label className="form-label">Document URL (Google Drive, Dropbox, etc.)</label>
-            <input name="url" type="url" value={form.url} onChange={handleChange} className="form-input" placeholder="https://drive.google.com/..." />
+            <label className="form-label">Document URL (Google Drive, Dropbox, etc.) *</label>
+            <input name="url" type="url" value={form.url} onChange={handleChange} className="form-input" placeholder="https://drive.google.com/..." required />
           </div>
           <div className="form-group">
-            <label className="form-label">Expiry Date</label>
-            <input name="expiryDate" type="date" value={form.expiryDate} onChange={handleChange} className="form-input" />
+            <label className="form-label">Expiry Date (DD-MM-YYYY) *</label>
+            <SegmentedDateInput
+              id="doc-expiry"
+              value={form.expiryDateInput}
+              onChange={(v) => {
+                setFormError('');
+                setForm((p) => ({ ...p, expiryDateInput: v, expiryDate: dmyToYmd(v) }));
+              }}
+              required
+              ariaLabel="Document expiry date"
+            />
           </div>
           <div className="form-group" style={{ gridColumn: '1/-1' }}>
-            <label className="form-label">Notes</label>
-            <textarea name="notes" value={form.notes} onChange={handleChange} className="form-input" rows={2} placeholder="Additional details..." style={{ resize: 'vertical' }} />
+            <label className="form-label">Notes *</label>
+            <textarea name="notes" value={form.notes} onChange={handleChange} className="form-input" rows={2} placeholder="Additional details..." style={{ resize: 'vertical' }} required />
           </div>
         </div>
       </Modal>
@@ -194,6 +282,16 @@ const DocumentVault = () => {
         }
         .icon-btn:hover { background: var(--bg-elevated); color: var(--text-primary); border-color: var(--border-default); }
         .icon-btn.danger:hover { color: var(--coral-400); border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.08); }
+
+        .segdate-wrap { display: flex; align-items: center; gap: 0.45rem; }
+        .segdate-part { width: 3.3rem; text-align: center; padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+        .segdate-year { width: 4.9rem; }
+        .segdate-sep { color: var(--text-muted); font-weight: 700; user-select: none; }
+        .segdate-calendar-btn {
+          height: 44px; width: 44px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);
+          background: var(--bg-elevated); cursor: pointer;
+        }
+        .segdate-native { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
       `}</style>
     </div>
   );

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import Button from './Button';
@@ -18,25 +18,48 @@ const Modal = ({
   closeOnOverlay = true,
 }) => {
   const overlayRef = useRef(null);
-  const firstFocusRef = useRef(null);
+  const containerRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  const wasOpenRef = useRef(false);
 
-  // Close on Escape key
-  const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Escape') onClose();
+  // Keep latest onClose without retriggering effects
+  useEffect(() => {
+    onCloseRef.current = onClose;
   }, [onClose]);
 
   useEffect(() => {
     if (isOpen) {
-      document.addEventListener('keydown', handleKeyDown);
       document.body.style.overflow = 'hidden';
-      // Focus first interactive element
-      setTimeout(() => firstFocusRef.current?.focus(), 50);
+      const handleKeyDown = (e) => {
+        if (e.key === 'Escape') onCloseRef.current?.();
+      };
+      document.addEventListener('keydown', handleKeyDown);
+
+      // Focus only when opening (not on every re-render)
+      if (!wasOpenRef.current) {
+        setTimeout(() => {
+          const root = containerRef.current;
+          if (!root) return;
+          const firstFocusable = root.querySelector(
+            'input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          );
+          firstFocusable?.focus?.();
+        }, 50);
+      }
+
+      wasOpenRef.current = true;
+
+      return () => {
+        document.removeEventListener('keydown', handleKeyDown);
+        document.body.style.overflow = '';
+        wasOpenRef.current = false;
+      };
     }
     return () => {
-      document.removeEventListener('keydown', handleKeyDown);
       document.body.style.overflow = '';
+      wasOpenRef.current = false;
     };
-  }, [isOpen, handleKeyDown]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -49,14 +72,14 @@ const Modal = ({
       aria-modal="true"
       aria-labelledby="modal-title"
     >
-      <div className={`modal-container modal-${size} animate-scale-in`}>
+      <div ref={containerRef} className={`modal-container modal-${size} animate-scale-in`}>
         {/* Header */}
         <div className="modal-header">
           <div>
             <h3 className="modal-title" id="modal-title">{title}</h3>
             {subtitle && <p className="modal-subtitle">{subtitle}</p>}
           </div>
-          <button className="modal-close" onClick={onClose} aria-label="Close modal" ref={firstFocusRef}>
+          <button className="modal-close" onClick={onClose} aria-label="Close modal">
             <X size={18} />
           </button>
         </div>

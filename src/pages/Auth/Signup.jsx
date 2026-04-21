@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { PlaneTakeoff, Eye, EyeOff, Mail, Lock, User, ArrowRight } from 'lucide-react';
-import { registerUser, loginWithGoogle } from '../../services/auth.service';
+import { registerUser, registerWithGoogle } from '../../services/auth.service';
 import Button from '../../components/ui/Button';
 
 /**
@@ -53,8 +53,19 @@ const Signup = () => {
       navigate('/dashboard');
     } catch (err) {
       setError(
-        err.code === 'auth/email-already-in-use'
-          ? 'An account with this email already exists.'
+        err.code === 'app/email-linked-google'
+          ? 'This email is linked with Google. Please use Continue with Google.'
+          :
+        err.code === 'app/recovery-email-sent'
+          ? 'Recovery email sent. Check your inbox, reset password, then sign in.'
+          :
+        err.code === 'app/account-needs-recovery'
+          ? 'This email exists already. Use Forgot Password once, then sign in.'
+          :
+        err.code === 'app/account-already-exists'
+          ? (err.message || 'This email is already in use. Please sign in or use Forgot Password.')
+          : err.code === 'auth/email-already-in-use'
+          ? 'An account with this email already exists. Please sign in or reset your password.'
           : err.message || 'Registration failed.'
       );
     } finally {
@@ -66,7 +77,7 @@ const Signup = () => {
     setLoadingGoogle(true);
     setError('');
     try {
-      await loginWithGoogle();
+      await registerWithGoogle();
       navigate('/dashboard');
     } catch (err) {
       if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
@@ -96,7 +107,15 @@ const Signup = () => {
         <p className="auth-subtitle"><i>"Vasudhaiva Kutumbakam"</i><br />Start planning smarter safars, together.</p>
 
         {error && (
-          <div className="auth-error" role="alert">{error}</div>
+          <div className="auth-error" role="alert">
+            <div>{error}</div>
+            {(error.toLowerCase().includes('already') || error.toLowerCase().includes('registered')) && (
+              <div className="auth-error-actions">
+                <Link to="/login">Sign in</Link>
+                <Link to={`/forgot-password?email=${encodeURIComponent(form.email || '')}`}>Forgot password</Link>
+              </div>
+            )}
+          </div>
         )}
 
         {/* Google Authentication */}
@@ -203,6 +222,8 @@ const Signup = () => {
         .auth-title { font-size:1.5rem; margin-bottom:0.4rem; }
         .auth-subtitle { font-size:0.875rem; color:var(--text-muted); margin-bottom:1.75rem; }
         .auth-error { background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:var(--radius-md); padding:0.75rem 1rem; color:var(--coral-400); font-size:0.85rem; margin-bottom:1.25rem; }
+        .auth-error-actions { display:flex; gap:0.9rem; margin-top:0.55rem; font-weight:600; font-size:0.8rem; }
+        .auth-error-actions a { color:var(--coral-500); text-decoration:underline; }
         .auth-field { margin-bottom:1rem; }
         .input-icon-wrap { position:relative; }
         .input-icon { position:absolute; left:0.9rem; top:50%; transform:translateY(-50%); color:var(--text-muted); pointer-events:none; }

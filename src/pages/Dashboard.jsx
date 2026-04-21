@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { getUserTrips, deleteTrip } from '../services/trip.service';
+import { getPlaceImage } from '../services/place-image.service';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Spinner from '../components/ui/Spinner';
@@ -23,6 +24,35 @@ const scaleIn = (delay = 0) => ({
   transition: { duration: 0.45, ease: [0.16, 1, 0.3, 1], delay }
 });
 
+const DASH_CACHE_PREFIX = 'safarsang_dashboard_trips_v1_';
+
+const toDate = (value) => {
+  if (!value) return null;
+  if (typeof value?.toDate === 'function') return value.toDate(); // Firestore Timestamp
+  if (value?.seconds != null) return new Date(value.seconds * 1000);
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const toDateFromYmd = (dateStr) => {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const d = new Date(`${dateStr}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const sanitizeForCache = (trip) => ({
+  id: trip.id,
+  name: trip.name || '',
+  destination: trip.destination || '',
+  startDate: trip.startDate || '',
+  endDate: trip.endDate || '',
+  status: trip.status || 'planning',
+  totalBudget: Number(trip.totalBudget || 0),
+  totalSpent: Number(trip.totalSpent || 0),
+  travelerCount: Number(trip.travelerCount || 1),
+  collaborators: Array.isArray(trip.collaborators) ? trip.collaborators : [],
+});
+
 /**
  * Dashboard — main hub showing all user trips, risk summary, and quick stats.
  * Demonstrates conditional rendering, lists/keys, useEffect for data fetching.
@@ -34,24 +64,74 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [deleting, setDeleting] = useState(null);
+  const [placeImages, setPlaceImages] = useState({});
+  const cacheKey = user?.uid ? `${DASH_CACHE_PREFIX}${user.uid}` : null;
 
   const fetchTrips = useCallback(async () => {
-    if (!user) return;
+    if (!user) {
+      setTrips([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
       const data = await getUserTrips(user.uid);
       setTrips(data);
+      if (cacheKey) {
+        const cached = data.map(sanitizeForCache);
+        localStorage.setItem(cacheKey, JSON.stringify({ updatedAt: Date.now(), trips: cached }));
+      }
     } catch (err) {
-      setError('Failed to load trips. Please refresh.');
+      setError('Failed to load trips. Showing last saved data if available.');
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user, cacheKey]);
 
   useEffect(() => {
+    if (cacheKey) {
+      try {
+        const raw = localStorage.getItem(cacheKey);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed?.trips)) {
+            setTrips(parsed.trips);
+            setLoading(false);
+          }
+        }
+      } catch {
+        // Ignore corrupted cache.
+      }
+    }
     fetchTrips();
-  }, [fetchTrips]);
+  }, [fetchTrips, cacheKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const destinations = [...new Set(trips.map((t) => (t.destination || '').trim()).filter(Boolean))];
+      if (destinations.length === 0) return;
+
+      const missing = destinations.filter((d) => !placeImages[d]);
+      if (missing.length === 0) return;
+
+      const entries = await Promise.all(
+        missing.map(async (d) => [d, await getPlaceImage(d)])
+      );
+
+      if (cancelled) return;
+      setPlaceImages((prev) => {
+        const next = { ...prev };
+        for (const [dest, url] of entries) {
+          if (url) next[dest] = url;
+        }
+        return next;
+      });
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [trips, placeImages]);
 
   const handleDelete = async (e, trip) => {
     e.stopPropagation();
@@ -60,7 +140,13 @@ const Dashboard = () => {
     setDeleting(trip.id);
     try {
       await deleteTrip(trip.id);
-      setTrips((prev) => prev.filter((t) => t.id !== trip.id));
+      setTrips((prev) => {
+        const next = prev.filter((t) => t.id !== trip.id);
+        if (cacheKey) {
+          localStorage.setItem(cacheKey, JSON.stringify({ updatedAt: Date.now(), trips: next.map(sanitizeForCache) }));
+        }
+        return next;
+      });
     } finally {
       setDeleting(null);
     }
@@ -71,19 +157,22 @@ const Dashboard = () => {
   };
 
   const formatDate = (dateStr) => {
-    if (!dateStr) return 'TBD';
-    return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const d = toDateFromYmd(dateStr);
+    if (!d) return 'TBD';
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
   };
 
   const daysUntil = (dateStr) => {
-    if (!dateStr) return null;
-    const diff = Math.ceil((new Date(dateStr + 'T00:00:00') - new Date()) / (1000 * 60 * 60 * 24));
-    return diff;
+    const start = toDateFromYmd(dateStr);
+    if (!start) return null;
+    const now = new Date();
+    return Math.ceil((start - now) / (1000 * 60 * 60 * 24));
   };
 
   // Stats derived from trips
-  const totalBudget = trips.reduce((s, t) => s + (t.totalBudget || 0), 0);
-  const upcomingCount = trips.filter((t) => t.startDate && daysUntil(t.startDate) > 0).length;
+  const totalBudget = trips.reduce((s, t) => s + Number(t.totalBudget || 0), 0);
+  const totalSpent = trips.reduce((s, t) => s + Number(t.totalSpent || 0), 0);
+  const upcomingCount = trips.filter((t) => ['planning', 'confirmed'].includes(t.status)).length;
 
   return (
     <div className="dash-page">
@@ -119,6 +208,7 @@ const Dashboard = () => {
           { label: 'Total Safars', value: trips.length, icon: Globe, color: 'teal' },
           { label: 'Upcoming', value: upcomingCount, icon: Calendar, color: 'sky' },
           { label: 'Total Budget', value: `₹${totalBudget.toLocaleString()}`, icon: IndianRupee, color: 'amber' },
+          { label: 'Spent So Far', value: `₹${totalSpent.toLocaleString()}`, icon: ShieldAlert, color: 'teal' },
         ].map((stat, i) => (
           <motion.div key={stat.label} className="dash-stat-card" {...scaleIn(i * 0.1 + 0.15)}>
             <div className={`dash-stat-icon dash-stat-icon-${stat.color}`}>
@@ -135,7 +225,7 @@ const Dashboard = () => {
       {/* Trips Grid */}
       <div className="dash-section">
         <motion.h2 className="dash-section-title" {...fadeUp(0.4)}>
-          <Map size={18} /> Your Trips
+          <Map size={18} /> Your Safars
         </motion.h2>
 
         {loading ? (
@@ -178,14 +268,23 @@ const Dashboard = () => {
                   id={`trip-card-${trip.id}`}
                 >
                   {/* Card gradient banner */}
-                  <div className="trip-card-banner" style={{
-                    background: `linear-gradient(135deg, hsl(${(i * 47 + 170) % 360}, 60%, 28%), hsl(${(i * 47 + 220) % 360}, 60%, 20%))`
-                  }}>
-                    <div className="trip-card-emoji">
-                      {trip.destination?.includes('Rishikesh') ? '🧵️' :
-                       trip.destination?.includes('Goa') ? '🌴' :
-                       trip.destination?.includes('Jaipur') ? '🏀' : '🪷'}
-                    </div>
+                  <div
+                    className="trip-card-banner"
+                    style={{
+                      backgroundImage: placeImages[trip.destination]
+                        ? `linear-gradient(135deg, rgba(0,0,0,0.28), rgba(0,0,0,0.45)), url(${placeImages[trip.destination]})`
+                        : `linear-gradient(135deg, hsl(${(i * 47 + 170) % 360}, 60%, 28%), hsl(${(i * 47 + 220) % 360}, 60%, 20%))`,
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                    }}
+                  >
+                    {!placeImages[trip.destination] && (
+                      <div className="trip-card-emoji">
+                        {trip.destination?.includes('Rishikesh') ? '🧵️' :
+                         trip.destination?.includes('Goa') ? '🌴' :
+                         trip.destination?.includes('Jaipur') ? '🏰' : '📍'}
+                      </div>
+                    )}
                     {days !== null && days > 0 && (
                       <div className="trip-countdown">
                         <Clock size={12} />
@@ -223,7 +322,7 @@ const Dashboard = () => {
                       <Badge variant={statusColor(trip.status)}>{trip.status}</Badge>
                       <span className="trip-collab">
                         <Users size={12} />
-                        {trip.collaborators?.length || 1} traveler{trip.collaborators?.length !== 1 ? 's' : ''}
+                        {(Number(trip.travelerCount) || trip.collaborators?.length || 1)} traveler{(Number(trip.travelerCount) || trip.collaborators?.length || 1) !== 1 ? 's' : ''}
                       </span>
                     </div>
 
@@ -313,10 +412,11 @@ const Dashboard = () => {
 
         .dash-stats-row {
           display: grid;
-          grid-template-columns: repeat(3, 1fr);
+          grid-template-columns: repeat(4, 1fr);
           gap: 1rem;
           margin-bottom: 2.5rem;
         }
+        @media (max-width: 900px) { .dash-stats-row { grid-template-columns: repeat(2, 1fr); } }
         @media (max-width: 640px) { .dash-stats-row { grid-template-columns: 1fr; } }
         .dash-stat-card {
           display: flex;
@@ -376,7 +476,7 @@ const Dashboard = () => {
 
         .trip-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
           gap: 1rem;
         }
         .trip-card {

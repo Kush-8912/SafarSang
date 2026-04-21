@@ -25,6 +25,7 @@ export const createTrip = async (tripData, userId) => {
     ...tripData,
     ownerId: userId,
     collaborators: [userId],
+    travelerCount: Number(tripData.travelerCount || 1),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     status: 'planning', // planning | confirmed | completed
@@ -38,13 +39,27 @@ export const createTrip = async (tripData, userId) => {
  * Get all trips where the user is a collaborator.
  */
 export const getUserTrips = async (userId) => {
+  // NOTE:
+  // Using where + orderBy on Firestore often requires a composite index and can
+  // fail with "The query requires an index". To keep dashboard fully functional
+  // without manual index setup, fetch by collaborator and sort client-side.
   const q = query(
     collection(db, 'trips'),
-    where('collaborators', 'array-contains', userId),
-    orderBy('createdAt', 'desc')
+    where('collaborators', 'array-contains', userId)
   );
   const snapshot = await getDocs(q);
-  return snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+  const toMillis = (v) => {
+    if (!v) return 0;
+    if (typeof v?.toMillis === 'function') return v.toMillis();
+    if (v?.seconds != null) return v.seconds * 1000;
+    const d = v instanceof Date ? v : new Date(v);
+    return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+  };
+
+  return snapshot.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
 };
 
 /**
@@ -94,7 +109,9 @@ export const addItineraryItem = async (tripId, item) => {
 };
 
 export const getItinerary = async (tripId) => {
-  const q = query(collection(db, 'trips', tripId, 'itinerary'), orderBy('date', 'asc'));
+  // Sort by createdAt only to avoid requiring a composite index.
+  // Date/time ordering is handled client-side in the UI.
+  const q = query(collection(db, 'trips', tripId, 'itinerary'), orderBy('createdAt', 'asc'));
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 };
@@ -134,6 +151,29 @@ export const deleteExpense = async (tripId, expenseId, amount) => {
   await updateDoc(doc(db, 'trips', tripId), { totalSpent: newTotal });
 };
 
+export const updateExpense = async (tripId, expenseId, updates) => {
+  const expRef = doc(db, 'trips', tripId, 'expenses', expenseId);
+  const beforeSnap = await getDoc(expRef);
+  if (!beforeSnap.exists()) throw new Error('Expense not found');
+
+  const before = beforeSnap.data();
+  const beforeAmount = Number(before.amount || 0);
+  const afterAmount = updates?.amount != null ? Number(updates.amount) : beforeAmount;
+
+  await updateDoc(expRef, {
+    ...updates,
+    updatedAt: serverTimestamp(),
+  });
+
+  // Keep trip totalSpent in sync if amount changed
+  const delta = afterAmount - beforeAmount;
+  if (delta !== 0) {
+    const trip = await getTripById(tripId);
+    const newTotal = Math.max(0, (trip.totalSpent || 0) + delta);
+    await updateDoc(doc(db, 'trips', tripId), { totalSpent: newTotal });
+  }
+};
+
 // ─── DOCUMENTS ────────────────────────────────────────────────────────────────
 
 export const addDocument = async (tripId, docData) => {
@@ -146,6 +186,13 @@ export const addDocument = async (tripId, docData) => {
 export const getDocuments = async (tripId) => {
   const snap = await getDocs(collection(db, 'trips', tripId, 'documents'));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+};
+
+export const updateDocumentItem = async (tripId, docId, updates) => {
+  await updateDoc(doc(db, 'trips', tripId, 'documents', docId), {
+    ...updates,
+    updatedAt: serverTimestamp(),
+  });
 };
 
 export const deleteDocument = async (tripId, docId) => {
@@ -169,6 +216,13 @@ export const getPackingList = async (tripId) => {
 
 export const togglePackingItem = async (tripId, itemId, packed) => {
   await updateDoc(doc(db, 'trips', tripId, 'packing', itemId), { packed });
+};
+
+export const updatePackingItem = async (tripId, itemId, updates) => {
+  await updateDoc(doc(db, 'trips', tripId, 'packing', itemId), {
+    ...updates,
+    updatedAt: serverTimestamp(),
+  });
 };
 
 export const deletePackingItem = async (tripId, itemId) => {
@@ -202,6 +256,13 @@ export const addEmergencyContact = async (tripId, contact) => {
 export const getEmergencyContacts = async (tripId) => {
   const snap = await getDocs(collection(db, 'trips', tripId, 'emergency'));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+};
+
+export const updateEmergencyContact = async (tripId, contactId, updates) => {
+  await updateDoc(doc(db, 'trips', tripId, 'emergency', contactId), {
+    ...updates,
+    updatedAt: serverTimestamp(),
+  });
 };
 
 export const deleteEmergencyContact = async (tripId, contactId) => {

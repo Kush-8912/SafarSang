@@ -3,16 +3,19 @@
  * We use standard fetch to the Groq REST API.
  */
 
-const MODEL = 'llama3-8b-8192';
+// Prefer a currently-supported Groq model; allow override via .env
+// Docs: https://console.groq.com/docs/models
+const DEFAULT_MODEL = 'llama-3.1-8b-instant';
 
-/**
- * Calls Groq and enforces a rigid JSON response matching the database structure.
- * @param {string} prompt User's text description of the trip
- * @param {string} apiKey User's API Key from environment or settings
- */
-export async function generateAITrip(prompt, apiKey) {
-  if (!apiKey) throw new Error("Groq API Key is missing. Please add it to your .env file as VITE_GROQ_API_KEY.");
+function extractFirstJsonObject(text) {
+  if (!text) return null;
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+  return text.slice(start, end + 1);
+}
 
+async function groqChatCompletion({ prompt, apiKey, model, useJsonMode }) {
   const url = `https://api.groq.com/openai/v1/chat/completions`;
 
   const systemInstruction = `
@@ -42,38 +45,69 @@ If the prompt doesn't specify an exact duration, assume 3 days.
 Make sure the start and end dates make logical sense.
 `;
 
+  const payload = {
+    model,
+    messages: [
+      { role: "system", content: systemInstruction },
+      { role: "user", content: prompt }
+    ],
+    temperature: 0.4,
+  };
+
+  if (useJsonMode) {
+    payload.response_format = { type: "json_object" };
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const rawText = await response.text();
+  if (!response.ok) {
+    // Bubble up the raw error body for easier diagnosis.
+    throw new Error(`Groq API Error: ${response.status} ${response.statusText} - ${rawText}`);
+  }
+
+  const data = JSON.parse(rawText);
+  const textOutput = data.choices?.[0]?.message?.content;
+  if (!textOutput) throw new Error("No response received from the travel agent.");
+  return textOutput;
+}
+
+/**
+ * Calls Groq and enforces a rigid JSON response matching the database structure.
+ * @param {string} prompt User's text description of the trip
+ * @param {string} apiKey User's API Key from environment or settings
+ */
+export async function generateAITrip(prompt, apiKey) {
+  if (!apiKey) throw new Error("Groq API Key is missing. Please add it to your .env file as VITE_GROQ_API_KEY.");
+
   try {
-    const payload = {
-      model: MODEL,
-      messages: [
-        { role: "system", content: systemInstruction },
-        { role: "user", content: prompt }
-      ],
-      response_format: { type: "json_object" }
-    };
+    const model = import.meta.env.VITE_GROQ_MODEL || DEFAULT_MODEL;
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error("Groq API Error:", errText);
-      throw new Error(`AI Service Failed: ${response.status} - ${response.statusText}`);
+    // Attempt 1: JSON mode (best when supported)
+    let textOutput;
+    try {
+      textOutput = await groqChatCompletion({ prompt, apiKey, model, useJsonMode: true });
+    } catch (err) {
+      // Attempt 2: fallback without JSON mode (some models/accounts reject response_format)
+      console.warn("Groq JSON mode failed, retrying without response_format.", err);
+      textOutput = await groqChatCompletion({ prompt, apiKey, model, useJsonMode: false });
     }
 
-    const data = await response.json();
-    const textOutput = data.choices?.[0]?.message?.content;
-    
-    if (!textOutput) throw new Error("No response received from the travel agent.");
-
-    // Parse strictly
-    return JSON.parse(textOutput);
+    // Parse strictly; if model adds extra text, extract the first JSON object.
+    try {
+      return JSON.parse(textOutput);
+    } catch {
+      const extracted = extractFirstJsonObject(textOutput);
+      if (!extracted) throw new Error("AI returned an invalid response format.");
+      return JSON.parse(extracted);
+    }
 
   } catch (err) {
     console.error("AI Generation Error: ", err);

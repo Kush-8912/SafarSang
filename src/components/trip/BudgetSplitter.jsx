@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
-import { IndianRupee, Plus, Trash2, TrendingUp, Users } from 'lucide-react';
+import { IndianRupee, Plus, Trash2, Edit3, TrendingUp, Users } from 'lucide-react';
 import { useTripContext } from '../../context/TripContext';
-import { addExpense, deleteExpense } from '../../services/trip.service';
+import { addExpense, deleteExpense, updateExpense } from '../../services/trip.service';
 import { useAuth } from '../../context/AuthContext';
 import Button from '../ui/Button';
 import Modal from '../ui/Modal';
@@ -17,7 +17,9 @@ const BudgetSplitter = () => {
   const { activeTrip, expenses, setExpenses } = useTripContext();
   const { user } = useAuth();
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
   const [form, setForm] = useState({
     title: '', amount: '', category: 'Transport',
     paidBy: user?.displayName || 'Me', splitWith: 1,
@@ -38,28 +40,77 @@ const BudgetSplitter = () => {
 
   const handleChange = (e) => {
     const { name, value } = e.target;
+    setFormError('');
     setForm((p) => ({ ...p, [name]: value }));
   };
 
-  const handleAdd = async () => {
-    if (!form.title || !form.amount) return;
+  const resetForm = () => {
+    setForm({ title: '', amount: '', category: 'Transport', paidBy: user?.displayName || 'Me', splitWith: 1 });
+    setEditingId(null);
+    setFormError('');
+  };
+
+  const openAddModal = () => {
+    resetForm();
+    setModalOpen(true);
+  };
+
+  const openEditModal = (exp) => {
+    setEditingId(exp.id);
+    setFormError('');
+    setForm({
+      title: exp.title || '',
+      amount: exp.amount ?? '',
+      category: exp.category || 'Transport',
+      paidBy: exp.paidBy || (user?.displayName || 'Me'),
+      splitWith: exp.splitWith || 1,
+    });
+    setModalOpen(true);
+  };
+
+  const handleSave = async () => {
+    const title = String(form.title || '').trim();
+    const paidBy = String(form.paidBy || '').trim();
+    const category = String(form.category || '').trim();
+    const amountNum = Number(form.amount);
+    const splitWithNum = Number(form.splitWith);
+
+    if (!title) { setFormError('Description is required.'); return; }
+    if (!Number.isFinite(amountNum) || amountNum <= 0) { setFormError('Amount must be greater than 0.'); return; }
+    if (!category) { setFormError('Category is required.'); return; }
+    if (!paidBy) { setFormError('Paid By is required.'); return; }
+    if (!Number.isFinite(splitWithNum) || splitWithNum < 1) { setFormError('Split Between must be at least 1.'); return; }
+    if (!activeTrip?.id) return;
     setSaving(true);
     try {
-      const id = await addExpense(activeTrip.id, {
+      const cleaned = {
         ...form,
-        amount: Number(form.amount),
-        addedBy: user?.uid,
-        addedByName: user?.displayName || 'Unknown',
-        date: new Date().toISOString(),
-      });
-      setExpenses((prev) => [{
-        id,
-        ...form,
-        amount: Number(form.amount),
-        date: new Date().toISOString(),
-      }, ...prev]);
+        title,
+        paidBy,
+        category,
+        amount: amountNum,
+        splitWith: splitWithNum,
+      };
+
+      if (editingId) {
+        await updateExpense(activeTrip.id, editingId, cleaned);
+        setExpenses((prev) => prev.map((e) => e.id === editingId ? { ...e, ...cleaned } : e));
+      } else {
+        const id = await addExpense(activeTrip.id, {
+          ...cleaned,
+          addedBy: user?.uid,
+          addedByName: user?.displayName || 'Unknown',
+          date: new Date().toISOString(),
+        });
+        setExpenses((prev) => [{
+          id,
+          ...cleaned,
+          date: new Date().toISOString(),
+        }, ...prev]);
+      }
+
       setModalOpen(false);
-      setForm({ title: '', amount: '', category: 'Transport', paidBy: user?.displayName || 'Me', splitWith: 1 });
+      resetForm();
     } finally {
       setSaving(false);
     }
@@ -82,7 +133,7 @@ const BudgetSplitter = () => {
           </span>
           Budget & Expenses
         </div>
-        <Button variant="primary" size="sm" icon={Plus} onClick={() => setModalOpen(true)} id="budget-add-btn">
+        <Button variant="primary" size="sm" icon={Plus} onClick={openAddModal} id="budget-add-btn">
           Add Expense
         </Button>
       </div>
@@ -171,6 +222,9 @@ const BudgetSplitter = () => {
               </div>
               <div className="expense-right">
                 <p className="expense-amount">₹{Number(exp.amount).toLocaleString()}</p>
+                <button className="icon-btn" onClick={() => openEditModal(exp)} id={`exp-edit-${exp.id}`}>
+                  <Edit3 size={14} />
+                </button>
                 <button className="icon-btn danger" onClick={() => handleDelete(exp)} id={`exp-del-${exp.id}`}>
                   <Trash2 size={14} />
                 </button>
@@ -180,41 +234,93 @@ const BudgetSplitter = () => {
         )}
       </div>
 
-      {/* Add Modal */}
+      {/* Add/Edit Modal */}
       <Modal
         isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        title="Add Expense"
-        subtitle="Record a new shared expense"
+        onClose={() => { setModalOpen(false); resetForm(); }}
+        title={editingId ? 'Edit Expense' : 'Add Expense'}
+        subtitle={editingId ? 'Update this expense' : 'Record a new shared expense'}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button variant="primary" loading={saving} onClick={handleAdd} id="expense-save-btn">Add Expense</Button>
+            <Button variant="ghost" onClick={() => { setModalOpen(false); resetForm(); }}>Cancel</Button>
+            <Button variant="primary" loading={saving} onClick={handleSave} id="expense-save-btn">
+              {editingId ? 'Save Changes' : 'Add Expense'}
+            </Button>
           </>
         }
       >
+        {formError && (
+          <div
+            role="alert"
+            style={{
+              marginBottom: '1rem',
+              background: 'rgba(239,68,68,0.1)',
+              border: '1px solid rgba(239,68,68,0.25)',
+              borderRadius: 'var(--radius-md)',
+              padding: '0.75rem 0.9rem',
+              color: 'var(--coral-400)',
+              fontSize: '0.85rem',
+            }}
+          >
+            {formError}
+          </div>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
           <div className="form-group" style={{ gridColumn: '1/-1' }}>
             <label className="form-label">Description *</label>
-            <input name="title" value={form.title} onChange={handleChange} className="form-input" placeholder="e.g. Hotel in Rome" />
+            <input
+              name="title"
+              value={form.title}
+              onChange={handleChange}
+              className="form-input"
+              placeholder="e.g. Hotel in Rome"
+              required
+            />
           </div>
           <div className="form-group">
             <label className="form-label">Amount (₹) *</label>
-            <input name="amount" type="number" min="0" step="0.01" value={form.amount} onChange={handleChange} className="form-input" placeholder="0.00" />
+            <input
+              name="amount"
+              type="number"
+              min="1"
+              step="1"
+              value={form.amount}
+              onChange={handleChange}
+              className="form-input"
+              placeholder="0"
+              inputMode="numeric"
+              required
+            />
           </div>
           <div className="form-group">
-            <label className="form-label">Category</label>
-            <select name="category" value={form.category} onChange={handleChange} className="form-input">
+            <label className="form-label">Category *</label>
+            <select name="category" value={form.category} onChange={handleChange} className="form-input" required>
               {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
             </select>
           </div>
           <div className="form-group">
-            <label className="form-label">Paid By</label>
-            <input name="paidBy" value={form.paidBy} onChange={handleChange} className="form-input" placeholder="Name" />
+            <label className="form-label">Paid By *</label>
+            <input
+              name="paidBy"
+              value={form.paidBy}
+              onChange={handleChange}
+              className="form-input"
+              placeholder="Name"
+              required
+            />
           </div>
           <div className="form-group">
-            <label className="form-label">Split Between (# people)</label>
-            <input name="splitWith" type="number" min="1" value={form.splitWith} onChange={handleChange} className="form-input" />
+            <label className="form-label">Split Between (# people) *</label>
+            <input
+              name="splitWith"
+              type="number"
+              min="1"
+              step="1"
+              value={form.splitWith}
+              onChange={handleChange}
+              className="form-input"
+              required
+            />
           </div>
           {form.amount && form.splitWith > 0 && (
             <div style={{ gridColumn: '1/-1', background: 'rgba(20,184,166,0.08)', border: '1px solid rgba(20,184,166,0.2)', borderRadius: 'var(--radius-md)', padding: '0.75rem 1rem' }}>

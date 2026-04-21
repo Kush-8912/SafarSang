@@ -14,6 +14,14 @@ const Settings = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const pass = form.newPassword || '';
+  const passReqs = [
+    { text: '8+ Chars', met: pass.length >= 8 },
+    { text: 'Uppercase', met: /[A-Z]/.test(pass) },
+    { text: 'Lowercase', met: /[a-z]/.test(pass) },
+    { text: 'Number', met: /[0-9]/.test(pass) },
+    { text: 'Special (!@#)', met: /[!@#$%^&*_,.?~-]/.test(pass) },
+  ];
 
   const handleChange = (e) => {
     setError('');
@@ -28,10 +36,11 @@ const Settings = () => {
       return;
     }
     
-    if (form.newPassword.length < 8) {
-      setError('New password must be at least 8 characters long.');
-      return;
-    }
+    if (form.newPassword.length < 8) { setError('New password must be at least 8 characters long.'); return; }
+    if (!/[A-Z]/.test(form.newPassword)) { setError('New password must contain at least one uppercase letter.'); return; }
+    if (!/[a-z]/.test(form.newPassword)) { setError('New password must contain at least one lowercase letter.'); return; }
+    if (!/[0-9]/.test(form.newPassword)) { setError('New password must contain at least one number.'); return; }
+    if (!/[!@#$%^&*_,.?~-]/.test(form.newPassword)) { setError('New password must contain at least one special character.'); return; }
     
     if (form.newPassword !== form.confirmPassword) {
       setError('New passwords do not match.');
@@ -111,6 +120,13 @@ const Settings = () => {
                   className="form-input has-icon"
                   placeholder="Min. 8 characters"
                 />
+              </div>
+              <div className="password-reqs">
+                {passReqs.map((req, i) => (
+                  <span key={i} className={`req-badge ${req.met ? 'met' : ''}`}>
+                    {req.met ? '✓' : '○'} {req.text}
+                  </span>
+                ))}
               </div>
             </div>
 
@@ -243,6 +259,20 @@ const Settings = () => {
           justify-content: flex-end;
           margin-top: 1rem;
         }
+        .password-reqs { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.6rem; }
+        .req-badge {
+          font-size: 0.68rem;
+          display: inline-flex;
+          align-items: center;
+          gap: 0.25rem;
+          padding: 0.2rem 0.5rem;
+          border-radius: 4px;
+          background: rgba(0,0,0,0.04);
+          color: var(--text-muted);
+          transition: all 0.2s ease;
+          font-weight: 500;
+        }
+        .req-badge.met { background: rgba(16,185,129,0.15); color: var(--teal-600); }
       `}</style>
     </div>
   );

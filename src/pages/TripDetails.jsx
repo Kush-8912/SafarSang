@@ -1,13 +1,19 @@
+import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Map, IndianRupee, FileText, Package,
+  Map, IndianRupee, FileText, Package, Edit3, Users,
   ShieldAlert, Phone, MessageSquare, AlertTriangle
 } from 'lucide-react';
 import { useTripContext } from '../context/TripContext';
+import { useAuth } from '../context/AuthContext';
 import { useTripData } from '../hooks/useTripData';
+import { updateTrip } from '../services/trip.service';
 import Spinner from '../components/ui/Spinner';
 import Badge from '../components/ui/Badge';
+import Button from '../components/ui/Button';
+import Modal from '../components/ui/Modal';
+import SegmentedDateInput, { dmyToYmd, isDmy, ymdToDmy } from '../components/ui/SegmentedDateInput';
 
 // Lazy is handled at App.jsx level; imports directly here for stability
 import ItineraryPlanner from '../components/trip/ItineraryPlanner';
@@ -35,8 +41,102 @@ const TAB_CONFIG = [
  */
 const TripDetails = () => {
   const { tripId } = useParams();
-  const { activeTrip, activeTab, setActiveTab, loading, riskFlags } = useTripContext();
+  const { user } = useAuth();
+  const { activeTrip, setActiveTrip, activeTab, setActiveTab, loading, riskFlags } = useTripContext();
   const { fetchError } = useTripData(tripId);
+  const [editOpen, setEditOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [metaForm, setMetaForm] = useState({
+    startDate: '',
+    endDate: '',
+    travelerCount: 1,
+    status: 'planning',
+  });
+
+  const formatDmy = (ymd) => {
+    if (!ymd) return 'TBD';
+    const d = new Date(`${ymd}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return 'TBD';
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  };
+
+  const openEditModal = () => {
+    if (!activeTrip) return;
+    setFormError('');
+    setMetaForm({
+      startDate: ymdToDmy(activeTrip.startDate || ''),
+      endDate: ymdToDmy(activeTrip.endDate || ''),
+      travelerCount: Number(activeTrip.travelerCount || activeTrip.collaborators?.length || 1),
+      status: activeTrip.status || 'planning',
+    });
+    setEditOpen(true);
+  };
+
+  const handleMetaChange = (e) => {
+    const { name, value } = e.target;
+    setFormError('');
+    if (name === 'travelerCount') {
+      const digits = String(value ?? '').replace(/\D/g, '');
+      const next = digits === '' ? 1 : Math.max(1, Number(digits));
+      setMetaForm((prev) => ({ ...prev, travelerCount: next }));
+      return;
+    }
+    setMetaForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const saveTripMeta = async () => {
+    if (!activeTrip?.id) return;
+    const travelerCount = Number(metaForm.travelerCount);
+    if (!metaForm.startDate) { setFormError('Start date is required.'); return; }
+    if (!metaForm.endDate) { setFormError('End date is required.'); return; }
+    if (!isDmy(metaForm.startDate) || !isDmy(metaForm.endDate)) {
+      setFormError('Dates must be in DD-MM-YYYY format.');
+      return;
+    }
+    const startYmd = dmyToYmd(metaForm.startDate);
+    const endYmd = dmyToYmd(metaForm.endDate);
+    if (!startYmd || !endYmd) { setFormError('Please enter valid dates.'); return; }
+    if (startYmd > endYmd) { setFormError('End date must be on or after start date.'); return; }
+    if (!Number.isFinite(travelerCount) || travelerCount < 1) { setFormError('Traveler count must be at least 1.'); return; }
+    if (!['planning', 'confirmed', 'completed'].includes(metaForm.status)) { setFormError('Please select a valid status.'); return; }
+
+    const updates = {
+      startDate: startYmd,
+      endDate: endYmd,
+      travelerCount,
+      status: metaForm.status,
+    };
+
+    setSaving(true);
+    try {
+      await updateTrip(activeTrip.id, updates);
+      setActiveTrip((prev) => {
+        const next = prev ? { ...prev, ...updates } : prev;
+        if (next && user?.uid) {
+          const cacheKey = `safarsang_dashboard_trips_v1_${user.uid}`;
+          try {
+            const raw = localStorage.getItem(cacheKey);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed?.trips)) {
+                const trips = parsed.trips.map((t) => (t.id === next.id ? { ...t, ...updates } : t));
+                localStorage.setItem(cacheKey, JSON.stringify({ updatedAt: Date.now(), trips }));
+              }
+            }
+          } catch {
+            // Ignore cache errors
+          }
+        }
+        return next;
+      });
+      setEditOpen(false);
+    } catch (err) {
+      setFormError(err?.message || 'Failed to update trip details.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -65,7 +165,7 @@ const TripDetails = () => {
         <div className="trip-page-header">
           <div>
             <div className="trip-page-breadcrumb">
-              <span>My Trips</span>
+              <span>My Safars</span>
               <span>/</span>
               <span style={{ color: 'var(--text-primary)' }}>{activeTrip.name}</span>
             </div>
@@ -74,15 +174,21 @@ const TripDetails = () => {
               <Badge variant={{ planning: 'amber', confirmed: 'teal', completed: 'gray' }[activeTrip.status] || 'gray'}>
                 {activeTrip.status}
               </Badge>
+              <span className="trip-page-dest"><Users size={12} style={{ verticalAlign: 'text-bottom' }} /> {Number(activeTrip.travelerCount || activeTrip.collaborators?.length || 1)} traveler{Number(activeTrip.travelerCount || activeTrip.collaborators?.length || 1) !== 1 ? 's' : ''}</span>
               {activeTrip.destination && (
                 <span className="trip-page-dest">📍 {activeTrip.destination}</span>
               )}
               {activeTrip.startDate && (
                 <span className="trip-page-date">
-                  📅 {new Date(activeTrip.startDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                  {activeTrip.endDate && ' → ' + new Date(activeTrip.endDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  📅 {formatDmy(activeTrip.startDate)}
+                  {activeTrip.endDate && ' → ' + formatDmy(activeTrip.endDate)}
                 </span>
               )}
+            </div>
+            <div style={{ marginTop: '0.65rem' }}>
+              <Button variant="secondary" size="sm" icon={Edit3} onClick={openEditModal} id="trip-meta-edit-btn">
+                Edit Safar Details
+              </Button>
             </div>
           </div>
 
@@ -150,6 +256,58 @@ const TripDetails = () => {
           </motion.div>
         </AnimatePresence>
       </div>
+
+      <Modal
+        isOpen={editOpen}
+        onClose={() => { if (!saving) setEditOpen(false); }}
+        title="Edit Trip Details"
+        subtitle="Update dates, traveler count, and status"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setEditOpen(false)} disabled={saving}>Cancel</Button>
+            <Button variant="primary" onClick={saveTripMeta} loading={saving} id="trip-meta-save-btn">Save Changes</Button>
+          </>
+        }
+      >
+        {formError && (
+          <div
+            role="alert"
+            style={{
+              marginBottom: '1rem',
+              background: 'rgba(239,68,68,0.1)',
+              border: '1px solid rgba(239,68,68,0.25)',
+              borderRadius: 'var(--radius-md)',
+              padding: '0.75rem 0.9rem',
+              color: 'var(--coral-400)',
+              fontSize: '0.85rem',
+            }}
+          >
+            {formError}
+          </div>
+        )}
+        <div className="trip-meta-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+          <div className="form-group">
+            <label className="form-label">Start Date *</label>
+            <SegmentedDateInput id="trip-meta-start" value={metaForm.startDate} onChange={(v) => { setFormError(''); setMetaForm((prev) => ({ ...prev, startDate: v })); }} required ariaLabel="Trip start date" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">End Date *</label>
+            <SegmentedDateInput id="trip-meta-end" value={metaForm.endDate} onChange={(v) => { setFormError(''); setMetaForm((prev) => ({ ...prev, endDate: v })); }} required ariaLabel="Trip end date" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Travelers *</label>
+            <input name="travelerCount" type="number" min="1" step="1" value={metaForm.travelerCount} onChange={handleMetaChange} className="form-input" required />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Status *</label>
+            <select name="status" value={metaForm.status} onChange={handleMetaChange} className="form-input" required>
+              <option value="planning">Planning</option>
+              <option value="confirmed">Confirmed</option>
+              <option value="completed">Completed</option>
+            </select>
+          </div>
+        </div>
+      </Modal>
 
       <style>{`
         .trip-page { max-width: 1000px; margin: 0 auto; }
@@ -254,8 +412,20 @@ const TripDetails = () => {
           border-radius: var(--radius-lg);
           padding: 1.75rem;
         }
+        .trip-meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+        .segdate-wrap { display: flex; align-items: center; gap: 0.45rem; }
+        .segdate-part { width: 3.3rem; text-align: center; padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+        .segdate-year { width: 4.9rem; }
+        .segdate-sep { color: var(--text-muted); font-weight: 700; user-select: none; }
+        .segdate-calendar-btn {
+          height: 44px; width: 44px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);
+          background: var(--bg-elevated); cursor: pointer;
+        }
+        .segdate-native { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
         @media (max-width: 640px) {
           .trip-tab-panel { padding: 1.25rem; }
+          .trip-meta-grid { grid-template-columns: 1fr; }
+          .segdate-wrap { flex-wrap: wrap; }
         }
       `}</style>
     </div>

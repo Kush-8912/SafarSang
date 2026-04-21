@@ -1,11 +1,11 @@
-import { useState } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import {
-  Map, Bell, User, LogOut, Settings, ChevronDown,
-  PlaneTakeoff, Menu, X
+  Bell, User, LogOut, Settings, ChevronDown, Menu, X
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { logoutUser } from '../services/auth.service';
+import { getUserTrips } from '../services/trip.service';
 
 /**
  * Navbar — top navigation bar with user menu and mobile toggle.
@@ -15,11 +15,162 @@ const Navbar = ({ onMobileMenuToggle, mobileMenuOpen }) => {
   const navigate = useNavigate();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [notifsOpen, setNotifsOpen] = useState(false);
+  const [notifs, setNotifs] = useState([]);
+  const [loadingNotifs, setLoadingNotifs] = useState(false);
+  const [readState, setReadState] = useState({});
 
-  const mockNotifs = [
-    { title: 'New Magic Safar', desc: 'Panditji finalized your requested itinerary!', time: '12m' },
-    { title: 'Trip Budget', desc: 'Your group budget for Goa was updated.', time: '2h' }
-  ];
+  const readKey = user?.uid ? `safarsang_notifs_read_v1_${user.uid}` : null;
+
+  const toMs = (v) => {
+    if (!v) return 0;
+    if (typeof v?.toMillis === 'function') return v.toMillis();
+    if (v?.seconds != null) return v.seconds * 1000;
+    const d = v instanceof Date ? v : new Date(v);
+    return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+  };
+
+  const daysUntil = (ymd) => {
+    if (!ymd) return null;
+    const d = new Date(`${ymd}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return null;
+    return Math.ceil((d - new Date()) / (1000 * 60 * 60 * 24));
+  };
+
+  const relTime = (ms) => {
+    if (!ms) return '';
+    const diff = Math.max(0, Date.now() - ms);
+    const m = Math.floor(diff / 60000);
+    if (m < 1) return 'now';
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h`;
+    const d = Math.floor(h / 24);
+    return `${d}d`;
+  };
+
+  const buildNotifications = (trips) => {
+    const out = [];
+    const now = Date.now();
+
+    for (const trip of trips) {
+      const startIn = daysUntil(trip.startDate);
+      const budget = Number(trip.totalBudget || 0);
+      const spent = Number(trip.totalSpent || 0);
+      const usage = budget > 0 ? spent / budget : 0;
+      const createdMs = toMs(trip.createdAt);
+
+      if (trip.status !== 'completed' && startIn !== null && startIn >= 0 && startIn <= 7) {
+        out.push({
+          id: `upcoming_${trip.id}`,
+          tripId: trip.id,
+          title: 'Upcoming Safar',
+          desc: `${trip.name} starts in ${startIn} day${startIn !== 1 ? 's' : ''}.`,
+          timeMs: createdMs || now,
+          severity: startIn <= 2 ? 'high' : 'medium',
+        });
+      }
+
+      if (budget > 0 && usage >= 0.85 && trip.status !== 'completed') {
+        out.push({
+          id: `budget_${trip.id}`,
+          tripId: trip.id,
+          title: usage >= 1 ? 'Budget Exceeded' : 'Budget Alert',
+          desc: `${trip.name} is at ${Math.round(usage * 100)}% budget usage.`,
+          timeMs: now,
+          severity: usage >= 1 ? 'high' : 'medium',
+        });
+      }
+
+      if (createdMs && now - createdMs <= 24 * 60 * 60 * 1000) {
+        out.push({
+          id: `new_${trip.id}`,
+          tripId: trip.id,
+          title: 'New Safar Created',
+          desc: `${trip.name} was added to your dashboard.`,
+          timeMs: createdMs,
+          severity: 'low',
+        });
+      }
+
+      if (trip.status === 'completed') {
+        out.push({
+          id: `completed_${trip.id}`,
+          tripId: trip.id,
+          title: 'Safar Completed',
+          desc: `Great job wrapping up ${trip.name}.`,
+          timeMs: now,
+          severity: 'low',
+        });
+      }
+    }
+
+    const deduped = new Map();
+    for (const n of out) deduped.set(n.id, n);
+    return [...deduped.values()]
+      .sort((a, b) => b.timeMs - a.timeMs)
+      .slice(0, 20);
+  };
+
+  useEffect(() => {
+    if (!readKey) return;
+    try {
+      const raw = localStorage.getItem(readKey);
+      if (raw) setReadState(JSON.parse(raw) || {});
+    } catch {
+      setReadState({});
+    }
+  }, [readKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!user?.uid) return;
+
+    const fetchNotifs = async () => {
+      setLoadingNotifs(true);
+      try {
+        const trips = await getUserTrips(user.uid);
+        if (!cancelled) setNotifs(buildNotifications(trips));
+      } catch {
+        if (!cancelled) setNotifs([]);
+      } finally {
+        if (!cancelled) setLoadingNotifs(false);
+      }
+    };
+
+    fetchNotifs();
+    const timer = setInterval(fetchNotifs, 60000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [user?.uid]);
+
+  const unreadCount = useMemo(
+    () => notifs.filter((n) => !readState[n.id]).length,
+    [notifs, readState]
+  );
+
+  const persistRead = (next) => {
+    setReadState(next);
+    if (readKey) localStorage.setItem(readKey, JSON.stringify(next));
+  };
+
+  const markRead = (notifId) => {
+    if (readState[notifId]) return;
+    persistRead({ ...readState, [notifId]: true });
+  };
+
+  const markAllRead = () => {
+    const next = { ...readState };
+    for (const n of notifs) next[n.id] = true;
+    persistRead(next);
+  };
+
+  const openNotif = (n) => {
+    markRead(n.id);
+    setNotifsOpen(false);
+    if (n.tripId) navigate(`/trips/${n.tripId}`);
+  };
 
   const handleLogout = async () => {
     try {
@@ -54,24 +205,44 @@ const Navbar = ({ onMobileMenuToggle, mobileMenuOpen }) => {
               id="nav-notifications"
             >
               <Bell size={18} />
-              <span className="nav-dot" />
+              {unreadCount > 0 && <span className="nav-dot" />}
             </button>
 
             {notifsOpen && (
               <div className="user-dropdown notifs-dropdown animate-scale-in">
                 <div className="dropdown-header">
                   <p className="dropdown-name" style={{ fontSize: '0.9rem' }}>Notifications</p>
+                  {notifs.length > 0 && (
+                    <button
+                      className="notif-mark-read"
+                      onClick={markAllRead}
+                      type="button"
+                    >
+                      Mark all read
+                    </button>
+                  )}
                 </div>
                 <div className="dropdown-divider" />
-                {mockNotifs.map((n, i) => (
-                  <div key={i} className="dropdown-item notif-item">
-                    <div className="notif-text">
-                      <strong style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-primary)' }}>{n.title}</strong>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{n.desc}</span>
-                    </div>
-                    <small style={{ fontSize: '0.65rem', color: 'var(--brand-500)', flexShrink: 0 }}>{n.time}</small>
-                  </div>
-                ))}
+                {loadingNotifs ? (
+                  <div className="notif-empty">Loading notifications...</div>
+                ) : notifs.length === 0 ? (
+                  <div className="notif-empty">No notifications right now.</div>
+                ) : (
+                  notifs.map((n) => (
+                    <button
+                      key={n.id}
+                      className={`dropdown-item notif-item ${readState[n.id] ? '' : 'unread'}`}
+                      onClick={() => openNotif(n)}
+                      type="button"
+                    >
+                      <div className="notif-text">
+                        <strong style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-primary)' }}>{n.title}</strong>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{n.desc}</span>
+                      </div>
+                      <small style={{ fontSize: '0.65rem', color: 'var(--brand-500)', flexShrink: 0 }}>{relTime(n.timeMs)}</small>
+                    </button>
+                  ))
+                )}
               </div>
             )}
           </div>
@@ -261,6 +432,8 @@ const Navbar = ({ onMobileMenuToggle, mobileMenuOpen }) => {
         .notifs-dropdown {
           width: 300px;
           right: -10px;
+          max-height: 420px;
+          overflow-y: auto;
         }
         .notif-item {
           display: flex;
@@ -270,8 +443,25 @@ const Navbar = ({ onMobileMenuToggle, mobileMenuOpen }) => {
           gap: 0.5rem;
           cursor: pointer;
         }
-        .notif-item:hover { background: var(--bg-modifier); }
+        .notif-item:hover { background: var(--bg-card); }
+        .notif-item.unread {
+          background: rgba(20,184,166,0.07);
+          border-left: 2px solid var(--teal-400);
+        }
         .notif-text { display: flex; flex-direction: column; gap: 0.2rem; }
+        .notif-mark-read {
+          margin-left: auto;
+          background: none;
+          border: none;
+          color: var(--teal-400);
+          font-size: 0.72rem;
+          cursor: pointer;
+        }
+        .notif-empty {
+          padding: 0.9rem 1rem;
+          font-size: 0.8rem;
+          color: var(--text-muted);
+        }
         
         .avatar-img-sm { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
         .dropdown-header {
@@ -312,6 +502,15 @@ const Navbar = ({ onMobileMenuToggle, mobileMenuOpen }) => {
         @media (max-width: 640px) {
           .hide-mobile { display: none !important; }
           .show-mobile { display: flex !important; }
+          .user-dropdown {
+            right: 0;
+            width: min(92vw, 300px);
+          }
+          .notifs-dropdown {
+            right: -40px;
+            width: min(92vw, 320px);
+            max-height: min(70vh, 420px);
+          }
         }
       `}</style>
     </nav>

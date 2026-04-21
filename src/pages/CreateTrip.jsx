@@ -5,6 +5,7 @@ import { createTrip, addItineraryItem } from '../services/trip.service';
 import { generateAITrip } from '../services/ai.service';
 import { useAuth } from '../context/AuthContext';
 import Button from '../components/ui/Button';
+import SegmentedDateInput, { isDmy } from '../components/ui/SegmentedDateInput';
 
 /**
  * CreateTrip — guided trip creation form with AI orchestration.
@@ -26,17 +27,43 @@ const CreateTrip = () => {
     status: 'planning',
   });
 
+  
+  const dmyToYmd = (v) => {
+    if (!isDmy(v)) return null;
+    const [dd, mm, yyyy] = v.split('-').map(Number);
+    const date = new Date(Date.UTC(yyyy, mm - 1, dd));
+    const isRealDate =
+      date.getUTCFullYear() === yyyy &&
+      date.getUTCMonth() === mm - 1 &&
+      date.getUTCDate() === dd;
+    if (!isRealDate) return null;
+    return `${String(yyyy).padStart(4, '0')}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+  };
+
   const handleChange = (e) => {
     const { name, value } = e.target;
     setError('');
     setForm((p) => ({ ...p, [name]: value }));
   };
 
+
   const validate = () => {
     if (!form.name.trim()) return 'Trip name is required.';
     if (!form.destination.trim()) return 'Destination is required.';
-    if (form.startDate && form.endDate && form.startDate > form.endDate)
+    if (!form.startDate.trim() || form.startDate === '--') return 'Start date is required.';
+    if (!form.endDate.trim() || form.endDate === '--') return 'End date is required.';
+    if (!isDmy(form.startDate)) return 'Start date must be in DD-MM-YYYY format.';
+    if (!isDmy(form.endDate)) return 'End date must be in DD-MM-YYYY format.';
+    const startYmd = dmyToYmd(form.startDate);
+    const endYmd = dmyToYmd(form.endDate);
+    if (!startYmd) return 'Start date is invalid.';
+    if (!endYmd) return 'End date is invalid.';
+    if (startYmd > endYmd)
       return 'End date must be after start date.';
+    if (!String(form.totalBudget).trim()) return 'Total budget is required.';
+    if (Number(form.totalBudget) < 0) return 'Total budget must be 0 or higher.';
+    if (!form.status) return 'Status is required.';
+    if (!form.description.trim()) return 'Description is required.';
     return null;
   };
 
@@ -46,9 +73,13 @@ const CreateTrip = () => {
     if (validationErr) { setError(validationErr); return; }
     setSaving(true);
     try {
+      const startYmd = dmyToYmd(form.startDate);
+      const endYmd = dmyToYmd(form.endDate);
       const tripId = await createTrip({
         ...form,
-        totalBudget: form.totalBudget ? Number(form.totalBudget) : 0,
+        startDate: startYmd,
+        endDate: endYmd,
+        totalBudget: Number(form.totalBudget),
       }, user.uid);
       navigate(`/trips/${tripId}`);
     } catch (err) {
@@ -193,29 +224,29 @@ const CreateTrip = () => {
               {/* Dates */}
               <div className="form-group">
                 <label className="form-label" htmlFor="ct-start">
-                  <Calendar size={13} style={{ display: 'inline', marginRight: 4 }} /> Start Date
+                  <Calendar size={13} style={{ display: 'inline', marginRight: 4 }} /> Start Date *
                 </label>
-                <input id="ct-start" name="startDate" type="date" value={form.startDate} onChange={handleChange} className="form-input" />
+                <SegmentedDateInput id="ct-start" value={form.startDate} onChange={(v) => { setError(''); setForm((p) => ({ ...p, startDate: v })); }} required ariaLabel="Start date" />
               </div>
               <div className="form-group">
                 <label className="form-label" htmlFor="ct-end">
-                  <Calendar size={13} style={{ display: 'inline', marginRight: 4 }} /> End Date
+                  <Calendar size={13} style={{ display: 'inline', marginRight: 4 }} /> End Date *
                 </label>
-                <input id="ct-end" name="endDate" type="date" value={form.endDate} onChange={handleChange} className="form-input" />
+                <SegmentedDateInput id="ct-end" value={form.endDate} onChange={(v) => { setError(''); setForm((p) => ({ ...p, endDate: v })); }} required ariaLabel="End date" />
               </div>
 
               {/* Budget */}
               <div className="form-group">
                 <label className="form-label" htmlFor="ct-budget">
-                  <IndianRupee size={13} style={{ display: 'inline', marginRight: 4 }} /> Total Budget (₹)
+                  <IndianRupee size={13} style={{ display: 'inline', marginRight: 4 }} /> Total Budget (₹) *
                 </label>
-                <input id="ct-budget" name="totalBudget" type="number" min="0" step="1" value={form.totalBudget} onChange={handleChange} className="form-input" placeholder="0" />
+                <input id="ct-budget" name="totalBudget" type="number" min="0" step="1" value={form.totalBudget} onChange={handleChange} className="form-input" placeholder="0" required />
               </div>
 
               {/* Status */}
               <div className="form-group">
-                <label className="form-label" htmlFor="ct-status">Status</label>
-                <select id="ct-status" name="status" value={form.status} onChange={handleChange} className="form-input">
+                <label className="form-label" htmlFor="ct-status">Status *</label>
+                <select id="ct-status" name="status" value={form.status} onChange={handleChange} className="form-input" required>
                   <option value="planning">Planning</option>
                   <option value="confirmed">Confirmed</option>
                   <option value="completed">Completed</option>
@@ -224,7 +255,7 @@ const CreateTrip = () => {
 
               {/* Description */}
               <div className="form-group" style={{ gridColumn: '1/-1' }}>
-                <label className="form-label" htmlFor="ct-desc">Description</label>
+                <label className="form-label" htmlFor="ct-desc">Description *</label>
                 <textarea
                   id="ct-desc"
                   name="description"
@@ -234,6 +265,7 @@ const CreateTrip = () => {
                   rows={3}
                   placeholder="Brief description of your trip plans..."
                   style={{ resize: 'vertical' }}
+                  required
                 />
               </div>
             </div>
@@ -334,8 +366,20 @@ const CreateTrip = () => {
         @media (max-width: 500px) {
           .create-grid { grid-template-columns: 1fr; }
           .create-grid > div[style] { grid-column: 1 !important; }
+          .mode-toggle-wrap { width: 100%; }
+          .mode-toggle-btn { flex: 1; justify-content: center; padding: 0.6rem 0.75rem; }
+          .segdate-wrap { flex-wrap: wrap; }
         }
         .create-input-lg { font-size: 1.05rem !important; padding: 0.85rem 1rem !important; }
+        .segdate-wrap { display: flex; align-items: center; gap: 0.45rem; }
+        .segdate-part { width: 3.8rem; text-align: center; padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+        .segdate-year { width: 5.5rem; }
+        .segdate-sep { color: var(--text-muted); font-weight: 700; user-select: none; }
+        .segdate-calendar-btn {
+          height: 44px; width: 44px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);
+          background: var(--bg-elevated); cursor: pointer;
+        }
+        .segdate-native { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
         .create-actions { display: flex; justify-content: flex-end; gap: 0.75rem; }
       `}</style>
     </div>

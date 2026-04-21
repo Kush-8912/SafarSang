@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { PlaneTakeoff, Mail, ArrowRight, CheckCircle } from 'lucide-react';
 import { resetPassword } from '../../services/auth.service';
 import Button from '../../components/ui/Button';
@@ -8,10 +8,16 @@ import Button from '../../components/ui/Button';
  * ForgotPassword — allows users to reset their forgotten passwords.
  */
 const ForgotPassword = () => {
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    const fromQuery = (searchParams.get('email') || '').trim();
+    if (fromQuery) setEmail(fromQuery);
+  }, [searchParams]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -27,7 +33,7 @@ const ForgotPassword = () => {
       setSuccess(true);
     } catch (err) {
       setError(
-        err.code === 'auth/user-not-found' 
+        err.code === 'app/account-not-found' || err.code === 'auth/user-not-found'
           ? 'No account found with this email.' 
           : err.message || 'Failed to send reset email.'
       );

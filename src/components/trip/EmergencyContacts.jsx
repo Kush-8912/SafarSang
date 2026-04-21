@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Phone, Plus, Trash2, User } from 'lucide-react';
+import { Phone, Plus, Trash2, User, Edit3 } from 'lucide-react';
 import { useTripContext } from '../../context/TripContext';
-import { addEmergencyContact, deleteEmergencyContact } from '../../services/trip.service';
+import { addEmergencyContact, updateEmergencyContact, deleteEmergencyContact } from '../../services/trip.service';
 import Button from '../ui/Button';
 import Modal from '../ui/Modal';
 import Badge from '../ui/Badge';
@@ -21,22 +21,69 @@ const typeColor = (type) => {
 const EmergencyContacts = () => {
   const { activeTrip, emergency, setEmergency } = useTripContext();
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
   const [form, setForm] = useState({ name: '', phone: '', type: 'Personal', relation: '', notes: '' });
 
   const handleChange = (e) => {
     const { name, value } = e.target;
+    setFormError('');
     setForm((p) => ({ ...p, [name]: value }));
   };
 
-  const handleAdd = async () => {
-    if (!form.name || !form.phone) return;
+  const resetForm = () => {
+    setForm({ name: '', phone: '', type: 'Personal', relation: '', notes: '' });
+    setEditingId(null);
+    setFormError('');
+  };
+
+  const openAddModal = () => {
+    resetForm();
+    setModalOpen(true);
+  };
+
+  const openEditModal = (contact) => {
+    setEditingId(contact.id);
+    setFormError('');
+    setForm({
+      name: contact.name || '',
+      phone: contact.phone || '',
+      type: contact.type || 'Personal',
+      relation: contact.relation || '',
+      notes: contact.notes || '',
+    });
+    setModalOpen(true);
+  };
+
+  const handleSave = async () => {
+    const name = String(form.name || '').trim();
+    const phone = String(form.phone || '').trim();
+    const type = String(form.type || '').trim();
+    const relation = String(form.relation || '').trim();
+    const notes = String(form.notes || '').trim();
+
+    if (!name) { setFormError('Name is required.'); return; }
+    if (!phone) { setFormError('Phone Number is required.'); return; }
+    if (!type) { setFormError('Type is required.'); return; }
+    if (!relation) { setFormError('Relation / Role is required.'); return; }
+    if (!notes) { setFormError('Notes are required.'); return; }
+
+    if (!activeTrip?.id) return;
     setSaving(true);
     try {
-      const ref = await addEmergencyContact(activeTrip.id, form);
-      setEmergency((prev) => [...prev, { id: ref.id, ...form }]);
+      const payload = { name, phone, type, relation, notes };
+      if (editingId) {
+        await updateEmergencyContact(activeTrip.id, editingId, payload);
+        setEmergency((prev) => prev.map((c) => (c.id === editingId ? { ...c, ...payload } : c)));
+      } else {
+        const ref = await addEmergencyContact(activeTrip.id, payload);
+        setEmergency((prev) => [...prev, { id: ref.id, ...payload }]);
+      }
       setModalOpen(false);
-      setForm({ name: '', phone: '', type: 'Personal', relation: '', notes: '' });
+      resetForm();
+    } catch (err) {
+      setFormError(err?.message || 'Failed to save contact.');
     } finally {
       setSaving(false);
     }
@@ -57,7 +104,7 @@ const EmergencyContacts = () => {
           </span>
           Emergency Contacts
         </div>
-        <Button variant="primary" size="sm" icon={Plus} onClick={() => setModalOpen(true)} id="ec-add-btn">
+        <Button variant="primary" size="sm" icon={Plus} onClick={openAddModal} id="ec-add-btn">
           Add Contact
         </Button>
       </div>
@@ -74,6 +121,9 @@ const EmergencyContacts = () => {
             <div key={contact.id} className="ec-card">
               <div className="ec-card-top">
                 <Badge variant={typeColor(contact.type)}>{contact.type}</Badge>
+                <button className="icon-btn" onClick={() => openEditModal(contact)} id={`ec-edit-${contact.id}`}>
+                  <Edit3 size={14} />
+                </button>
                 <button className="icon-btn danger" onClick={() => handleDelete(contact)} id={`ec-del-${contact.id}`}>
                   <Trash2 size={14} />
                 </button>
@@ -95,37 +145,55 @@ const EmergencyContacts = () => {
 
       <Modal
         isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        title="Add Emergency Contact"
+        onClose={() => { setModalOpen(false); resetForm(); }}
+        title={editingId ? 'Edit Emergency Contact' : 'Add Emergency Contact'}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button variant="primary" loading={saving} onClick={handleAdd} id="ec-save-btn">Add Contact</Button>
+            <Button variant="ghost" onClick={() => { setModalOpen(false); resetForm(); }}>Cancel</Button>
+            <Button variant="primary" loading={saving} onClick={handleSave} id="ec-save-btn">
+              {editingId ? 'Save Changes' : 'Add Contact'}
+            </Button>
           </>
         }
       >
+        {formError && (
+          <div
+            role="alert"
+            style={{
+              marginBottom: '1rem',
+              background: 'rgba(239,68,68,0.1)',
+              border: '1px solid rgba(239,68,68,0.25)',
+              borderRadius: 'var(--radius-md)',
+              padding: '0.75rem 0.9rem',
+              color: 'var(--coral-400)',
+              fontSize: '0.85rem',
+            }}
+          >
+            {formError}
+          </div>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div className="form-group">
             <label className="form-label">Name *</label>
-            <input name="name" value={form.name} onChange={handleChange} className="form-input" placeholder="Contact name" />
+            <input name="name" value={form.name} onChange={handleChange} className="form-input" placeholder="Contact name" required />
           </div>
           <div className="form-group">
             <label className="form-label">Phone Number *</label>
-            <input name="phone" type="tel" value={form.phone} onChange={handleChange} className="form-input" placeholder="+1 555 000 0000" />
+            <input name="phone" type="tel" value={form.phone} onChange={handleChange} className="form-input" placeholder="+1 555 000 0000" required />
           </div>
           <div className="form-group">
-            <label className="form-label">Type</label>
-            <select name="type" value={form.type} onChange={handleChange} className="form-input">
+            <label className="form-label">Type *</label>
+            <select name="type" value={form.type} onChange={handleChange} className="form-input" required>
               {TYPES.map((t) => <option key={t}>{t}</option>)}
             </select>
           </div>
           <div className="form-group">
-            <label className="form-label">Relation / Role</label>
-            <input name="relation" value={form.relation} onChange={handleChange} className="form-input" placeholder="e.g. Doctor, Friend, Hotel Manager" />
+            <label className="form-label">Relation / Role *</label>
+            <input name="relation" value={form.relation} onChange={handleChange} className="form-input" placeholder="e.g. Doctor, Friend, Hotel Manager" required />
           </div>
           <div className="form-group">
-            <label className="form-label">Notes</label>
-            <textarea name="notes" value={form.notes} onChange={handleChange} className="form-input" rows={2} style={{ resize: 'vertical' }} />
+            <label className="form-label">Notes *</label>
+            <textarea name="notes" value={form.notes} onChange={handleChange} className="form-input" rows={2} style={{ resize: 'vertical' }} required />
           </div>
         </div>
       </Modal>

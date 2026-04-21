@@ -18,6 +18,7 @@ const CreateTrip  = lazy(() => import('./pages/CreateTrip'));
 const TripDetails = lazy(() => import('./pages/TripDetails'));
 const NotFound    = lazy(() => import('./pages/NotFound'));
 const ForgotPassword = lazy(() => import('./pages/Auth/ForgotPassword'));
+const ResetPassword = lazy(() => import('./pages/Auth/ResetPassword'));
 const Profile     = lazy(() => import('./pages/Profile/Profile'));
 const Settings    = lazy(() => import('./pages/Profile/Settings'));
 
@@ -100,6 +101,8 @@ const InnerRouter = () => {
           <Route path="/login"  element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
           <Route path="/signup" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Signup />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/__/auth/action" element={<ResetPassword />} />
 
           {/* Root redirect */}
           <Route path="/" element={<Navigate to={isAuthenticated ? '/dashboard' : '/login'} replace />} />

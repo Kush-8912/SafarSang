@@ -12,6 +12,9 @@ const SEVERITY_CONFIG = {
  */
 const RiskFlags = () => {
   const { riskFlags } = useTripContext();
+  const highCount = riskFlags.filter((f) => f.severity === 'high').length;
+  const mediumCount = riskFlags.filter((f) => f.severity === 'medium').length;
+  const lowCount = riskFlags.filter((f) => f.severity === 'low').length;
 
   return (
     <div className="risk-wrap animate-fade-in">
@@ -23,9 +26,17 @@ const RiskFlags = () => {
           Risk Flags
         </div>
         <span className="risk-count-badge">
-          {riskFlags.filter((f) => f.severity === 'high').length} critical
+          {highCount} critical
         </span>
       </div>
+
+      {riskFlags.length > 0 && (
+        <div className="risk-summary-row">
+          <span className="risk-chip high">{highCount} High</span>
+          <span className="risk-chip medium">{mediumCount} Medium</span>
+          <span className="risk-chip low">{lowCount} Low</span>
+        </div>
+      )}
 
       {riskFlags.length === 0 ? (
         <div className="empty-state">
@@ -64,8 +75,8 @@ const RiskFlags = () => {
       <div className="risk-legend">
         <p className="risk-legend-title">How risk flags work</p>
         <ul className="risk-legend-list">
-          <li><span style={{ color: 'var(--coral-400)' }}>HIGH</span> — Budget ≥85% used, or packing incomplete within 3 days</li>
-          <li><span style={{ color: 'var(--amber-400)' }}>MEDIUM</span> — No documents uploaded</li>
+          <li><span style={{ color: 'var(--coral-400)' }}>HIGH</span> — Budget ≥85% used (or exceeded), or packing incomplete within 3 days</li>
+          <li><span style={{ color: 'var(--amber-400)' }}>MEDIUM</span> — No documents added</li>
           <li><span style={{ color: 'var(--sky-400)' }}>LOW</span> — No emergency contacts added</li>
         </ul>
       </div>
@@ -80,6 +91,20 @@ const RiskFlags = () => {
           border-radius: var(--radius-full);
           padding: 0.2rem 0.65rem;
         }
+        .risk-summary-row {
+          display: flex;
+          gap: 0.5rem;
+          flex-wrap: wrap;
+        }
+        .risk-chip {
+          font-size: 0.72rem;
+          border-radius: var(--radius-full);
+          padding: 0.2rem 0.55rem;
+          border: 1px solid transparent;
+        }
+        .risk-chip.high { color: var(--coral-400); background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.2); }
+        .risk-chip.medium { color: var(--amber-400); background: rgba(251,191,36,0.08); border-color: rgba(251,191,36,0.2); }
+        .risk-chip.low { color: var(--sky-400); background: rgba(56,189,248,0.08); border-color: rgba(56,189,248,0.2); }
         .risk-list { display: flex; flex-direction: column; gap: 0.65rem; }
         .risk-item {
           display: flex;

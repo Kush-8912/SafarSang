@@ -13,6 +13,7 @@ const TripComments = () => {
   const { user } = useAuth();
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState('');
   const bottomRef = useRef(null); // Ref for auto-scroll
 
   // Auto-scroll to bottom when new comments arrive
@@ -21,10 +22,16 @@ const TripComments = () => {
   }, [comments]);
 
   const handleSend = async () => {
-    if (!text.trim()) return;
+    const message = text.trim();
+    if (!message) return;
+    if (!activeTrip?.id) {
+      setSendError('Trip is not loaded yet. Please try again.');
+      return;
+    }
     setSending(true);
+    setSendError('');
     const commentData = {
-      text: text.trim(),
+      text: message,
       userId: user?.uid,
       userName: user?.displayName || 'Anonymous',
       createdAt: new Date().toISOString(),
@@ -33,6 +40,8 @@ const TripComments = () => {
       const ref = await addComment(activeTrip.id, commentData);
       setComments((prev) => [...prev, { id: ref.id, ...commentData }]);
       setText('');
+    } catch (err) {
+      setSendError(err?.message || 'Failed to send message.');
     } finally {
       setSending(false);
     }
@@ -45,14 +54,30 @@ const TripComments = () => {
     }
   };
 
+  const toDate = (ts) => {
+    if (!ts) return null;
+    // Firestore Timestamp shape
+    if (typeof ts?.toDate === 'function') return ts.toDate();
+    if (ts?.seconds != null) return new Date(ts.seconds * 1000);
+    // ISO string or Date
+    const d = ts instanceof Date ? ts : new Date(ts);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+
   const formatTime = (ts) => {
     if (!ts) return '';
-    const d = new Date(ts);
+    const d = toDate(ts);
+    if (!d) return '';
     return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) +
-      ' · ' + d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      ' · ' + d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
   };
 
   const initials = (name) => name ? name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2) : '?';
+  const sortedComments = [...comments].sort((a, b) => {
+    const ta = toDate(a.createdAt)?.getTime() || 0;
+    const tb = toDate(b.createdAt)?.getTime() || 0;
+    return ta - tb;
+  });
 
   return (
     <div className="chat-wrap animate-fade-in">
@@ -68,13 +93,13 @@ const TripComments = () => {
 
       {/* Messages */}
       <div className="chat-msgs">
-        {comments.length === 0 ? (
+        {sortedComments.length === 0 ? (
           <div className="empty-state" style={{ padding: '2rem' }}>
             <MessageSquare size={36} />
             <p>No messages yet. Start the conversation!</p>
           </div>
         ) : (
-          comments.map((c) => {
+          sortedComments.map((c) => {
             const isMe = c.userId === user?.uid;
             return (
               <div key={c.id} className={`msg-row ${isMe ? 'me' : ''}`}>
@@ -94,15 +119,31 @@ const TripComments = () => {
       </div>
 
       {/* Input */}
+      {sendError && (
+        <div
+          role="alert"
+          style={{
+            background: 'rgba(239,68,68,0.1)',
+            border: '1px solid rgba(239,68,68,0.25)',
+            borderRadius: 'var(--radius-md)',
+            padding: '0.6rem 0.8rem',
+            color: 'var(--coral-400)',
+            fontSize: '0.82rem',
+          }}
+        >
+          {sendError}
+        </div>
+      )}
       <div className="chat-input-row">
         <textarea
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => { setSendError(''); setText(e.target.value); }}
           onKeyDown={handleKeyDown}
           className="form-input chat-textarea"
           placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
           rows={2}
           id="chat-input"
+          disabled={sending}
         />
         <button
           className={`send-btn ${text.trim() && !sending ? 'active' : ''}`}

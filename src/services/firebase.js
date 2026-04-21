@@ -14,7 +14,7 @@ const firebaseConfig = {
   projectId: "safarsang-9e997",
   // 💡 NOTE: If your storage upload fails/hangs, try changing the suffix below from
   // ".firebasestorage.app" to ".appspot.com" (used for projects created before Oct 2024).
-  storageBucket: "safarsang-9e997.firebasestorage.app",
+  storageBucket: "safarsang-9e997.appspot.com",
   messagingSenderId: "694259028890",
   appId: "1:694259028890:web:d87b493cd82803b876e023",
   measurementId: "G-N8YS8TQY2B"

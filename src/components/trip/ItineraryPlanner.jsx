@@ -10,6 +10,7 @@ import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Modal from '../ui/Modal';
 import Badge from '../ui/Badge';
+import SegmentedDateInput, { dmyToYmd, ymdToDmy } from '../ui/SegmentedDateInput';
 
 const CATEGORY_COLORS = {
   transport: 'sky',
@@ -17,6 +18,41 @@ const CATEGORY_COLORS = {
   activity: 'teal',
   food: 'amber',
   other: 'gray',
+};
+
+const pad2 = (n) => String(n).padStart(2, '0');
+
+
+// --- Time helpers (user-facing HH:MM + AM/PM, stored as 24h HH:MM) ---
+const maskHM = (raw) => {
+  const digits = String(raw || '').replace(/\D/g, '').slice(0, 4); // HHMM
+  const hh = digits.slice(0, 2);
+  const mm = digits.slice(2, 4);
+  return [hh, mm].filter(Boolean).join(':');
+};
+
+const hmAmpmTo24hIfComplete = ({ hm, ampm }) => {
+  const digits = String(hm || '').replace(/\D/g, '').slice(0, 4);
+  if (digits.length !== 4) return '';
+  const hh12 = Number(digits.slice(0, 2));
+  const mm = Number(digits.slice(2, 4));
+  if (hh12 < 1 || hh12 > 12) return '';
+  if (mm < 0 || mm > 59) return '';
+  const isPM = ampm === 'PM';
+  let hh24 = hh12 % 12;
+  if (isPM) hh24 += 12;
+  return `${pad2(hh24)}:${pad2(mm)}`;
+};
+
+const from24hToHmAmpm = (time24) => {
+  if (!time24 || !time24.includes(':')) return { hm: '', ampm: 'AM' };
+  const [hhRaw, mmRaw] = time24.split(':');
+  const hh = Number(hhRaw);
+  const mm = Number(mmRaw);
+  if (Number.isNaN(hh) || Number.isNaN(mm)) return { hm: '', ampm: 'AM' };
+  const ampm = hh >= 12 ? 'PM' : 'AM';
+  const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  return { hm: `${pad2(h12)}:${pad2(mm)}`, ampm };
 };
 
 /**
@@ -28,9 +64,15 @@ const ItineraryPlanner = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
   const [form, setForm] = useState({
-    date: '',
-    time: '',
+    // Canonical values we persist
+    date: '', // "YYYY-MM-DD"
+    time: '', // "HH:MM"
+    // User-friendly inputs
+    dateInput: '', // "DD-MM-YYYY"
+    timeInput: '', // "HH:MM" in 12-hour form
+    ampm: 'AM',
     title: '',
     location: '',
     category: 'activity',
@@ -39,17 +81,34 @@ const ItineraryPlanner = () => {
   });
 
   const resetForm = () => {
-    setForm({ date: '', time: '', title: '', location: '', category: 'activity', notes: '', confirmed: false });
+    setForm({
+      date: '',
+      time: '',
+      dateInput: '',
+      timeInput: '',
+      ampm: 'AM',
+      title: '',
+      location: '',
+      category: 'activity',
+      notes: '',
+      confirmed: false
+    });
     setEditing(null);
+    setFormError('');
   };
 
   const openAddModal = () => { resetForm(); setModalOpen(true); };
 
   const openEditModal = (item) => {
     setEditing(item.id);
+    setFormError('');
+    const t = from24hToHmAmpm(item.time || '');
     setForm({
       date: item.date || '',
       time: item.time || '',
+      dateInput: ymdToDmy(item.date || ''),
+      timeInput: t.hm,
+      ampm: t.ampm,
       title: item.title || '',
       location: item.location || '',
       category: item.category || 'activity',
@@ -61,22 +120,72 @@ const ItineraryPlanner = () => {
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
+    setFormError('');
     setForm((prev) => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
   };
 
+  const handleTimeInputChange = (e) => {
+    const masked = maskHM(e.target.value);
+    setFormError('');
+    setForm((prev) => {
+      const time24 = hmAmpmTo24hIfComplete({ hm: masked, ampm: prev.ampm });
+      return { ...prev, timeInput: masked, time: time24 };
+    });
+  };
+
+  const handleAmpmChange = (e) => {
+    const ampm = e.target.value;
+    setFormError('');
+    setForm((prev) => {
+      const time24 = hmAmpmTo24hIfComplete({ hm: prev.timeInput, ampm });
+      return { ...prev, ampm, time: time24 };
+    });
+  };
+
   const handleSave = async () => {
-    if (!form.date || !form.title) return;
+    if (!activeTrip?.id) {
+      setFormError('Trip is not loaded yet. Please wait a second and try again.');
+      return;
+    }
+
+    const title = (form.title || '').trim();
+    const date = (form.date || '').trim();
+    const time = (form.time || '').trim();
+    const location = (form.location || '').trim();
+    const notes = (form.notes || '').trim();
+    const category = (form.category || '').trim();
+
+    // All fields (except confirmed) are mandatory
+    if (!date) { setFormError('Date is required.'); return; }
+    if (!time) { setFormError('Time is required.'); return; }
+    if (!title) { setFormError('Title is required.'); return; }
+    if (!location) { setFormError('Location is required.'); return; }
+    if (!category) { setFormError('Category is required.'); return; }
+    if (!notes) { setFormError('Notes are required.'); return; }
+
+    const cleaned = {
+      ...form,
+      title,
+      date,
+      time,
+      location,
+      notes,
+      category,
+    };
+
     setSaving(true);
     try {
       if (editing) {
-        await updateItineraryItem(activeTrip.id, editing, form);
-        setItinerary((prev) => prev.map((i) => i.id === editing ? { ...i, ...form } : i));
+        await updateItineraryItem(activeTrip.id, editing, cleaned);
+        setItinerary((prev) => prev.map((i) => i.id === editing ? { ...i, ...cleaned } : i));
       } else {
-        const ref = await addItineraryItem(activeTrip.id, form);
-        setItinerary((prev) => [...prev, { id: ref.id, ...form }]);
+        const ref = await addItineraryItem(activeTrip.id, cleaned);
+        setItinerary((prev) => [...prev, { id: ref.id, ...cleaned }]);
       }
       setModalOpen(false);
       resetForm();
+    } catch (err) {
+      setFormError(err?.message || 'Failed to save activity. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -178,26 +287,59 @@ const ItineraryPlanner = () => {
           </>
         }
       >
+        {formError && (
+          <div
+            role="alert"
+            style={{
+              marginBottom: '1rem',
+              background: 'rgba(239,68,68,0.1)',
+              border: '1px solid rgba(239,68,68,0.25)',
+              borderRadius: 'var(--radius-md)',
+              padding: '0.75rem 0.9rem',
+              color: 'var(--coral-400)',
+              fontSize: '0.85rem',
+            }}
+          >
+            {formError}
+          </div>
+        )}
         <div className="modal-form-grid">
           <div className="form-group">
             <label className="form-label">Date *</label>
-            <input
-              type="date"
-              name="date"
-              value={form.date}
-              onChange={handleChange}
-              className="form-input form-input-datetime"
+            <SegmentedDateInput
+              id="itin-date"
+              value={form.dateInput}
+              onChange={(v) => {
+                setFormError('');
+                setForm((prev) => ({ ...prev, dateInput: v, date: dmyToYmd(v) }));
+              }}
+              required
+              ariaLabel="Itinerary date"
             />
           </div>
           <div className="form-group">
-            <label className="form-label">Time</label>
-            <input
-              type="time"
-              name="time"
-              value={form.time}
-              onChange={handleChange}
-              className="form-input form-input-datetime"
-            />
+            <label className="form-label">Time *</label>
+            <div className="time-picker">
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="HH:MM"
+                value={form.timeInput}
+                onChange={handleTimeInputChange}
+                className="form-input form-input-datetime"
+                maxLength={5}
+                required
+              />
+              <select
+                value={form.ampm}
+                onChange={handleAmpmChange}
+                className="form-input form-input-datetime"
+                required
+              >
+                <option value="AM">AM</option>
+                <option value="PM">PM</option>
+              </select>
+            </div>
           </div>
           <div className="form-group full-span">
             <label className="form-label">Title *</label>
@@ -208,10 +350,11 @@ const ItineraryPlanner = () => {
               onChange={handleChange}
               className="form-input"
               placeholder="e.g. Flight to Paris, Hotel Check-in"
+              required
             />
           </div>
           <div className="form-group full-span">
-            <label className="form-label">Location</label>
+            <label className="form-label">Location *</label>
             <input
               type="text"
               name="location"
@@ -219,11 +362,12 @@ const ItineraryPlanner = () => {
               onChange={handleChange}
               className="form-input"
               placeholder="Address or place name"
+              required
             />
           </div>
           <div className="form-group">
-            <label className="form-label">Category</label>
-            <select name="category" value={form.category} onChange={handleChange} className="form-input">
+            <label className="form-label">Category *</label>
+            <select name="category" value={form.category} onChange={handleChange} className="form-input" required>
               <option value="transport">Transport</option>
               <option value="accommodation">Accommodation</option>
               <option value="activity">Activity</option>
@@ -238,7 +382,7 @@ const ItineraryPlanner = () => {
             </label>
           </div>
           <div className="form-group full-span">
-            <label className="form-label">Notes</label>
+            <label className="form-label">Notes *</label>
             <textarea
               name="notes"
               value={form.notes}
@@ -247,6 +391,7 @@ const ItineraryPlanner = () => {
               rows={3}
               placeholder="Additional notes..."
               style={{ resize: 'vertical', minHeight: '80px', lineHeight: '1.6', fontFamily: 'inherit' }}
+              required
             />
           </div>
         </div>
@@ -313,9 +458,12 @@ const ItineraryPlanner = () => {
         .form-input-datetime {
           color-scheme: light;
           color: var(--text-primary);
+          -webkit-text-fill-color: var(--text-primary);
           background: var(--bg-elevated);
           border: 2px solid var(--border-subtle);
           min-height: 50px;
+          font-size: 1rem;
+          line-height: 1.2;
         }
         .form-input-datetime::-webkit-calendar-picker-indicator {
           opacity: 0.6;
@@ -346,9 +494,27 @@ const ItineraryPlanner = () => {
         }
         .form-input-datetime::-webkit-inner-spin-button { display: none; }
 
+        .segdate-wrap { display: flex; align-items: center; gap: 0.45rem; }
+        .segdate-part { width: 3.3rem; text-align: center; padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+        .segdate-year { width: 4.9rem; }
+        .segdate-sep { color: var(--text-muted); font-weight: 700; user-select: none; }
+        .segdate-calendar-btn {
+          height: 50px; width: 44px; border-radius: var(--radius-sm); border: 2px solid var(--border-subtle);
+          background: var(--bg-elevated); cursor: pointer;
+        }
+        .segdate-native { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
+
+        .time-picker {
+          display: grid;
+          grid-template-columns: 1fr 110px;
+          gap: 0.5rem;
+          align-items: center;
+        }
+
         @media (max-width: 500px) {
           .modal-form-grid { grid-template-columns: 1fr; }
           .modal-form-grid .full-span { grid-column: 1; }
+          .time-picker { grid-template-columns: 1fr 90px; }
         }
       `}</style>
     </div>

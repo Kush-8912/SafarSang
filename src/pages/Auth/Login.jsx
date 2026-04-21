@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { PlaneTakeoff, Eye, EyeOff, Mail, Lock, ArrowRight } from 'lucide-react';
 import { loginUser, loginWithGoogle } from '../../services/auth.service';
@@ -19,6 +19,19 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const [loadingGoogle, setLoadingGoogle] = useState(false);
   const [localError, setLocalError] = useState('');
+  const AUTH_NOTICE_KEY = 'safarsang_auth_notice';
+
+  useEffect(() => {
+    try {
+      const notice = sessionStorage.getItem(AUTH_NOTICE_KEY);
+      if (notice) {
+        setLocalError(notice);
+        sessionStorage.removeItem(AUTH_NOTICE_KEY);
+      }
+    } catch {
+      // Ignore sessionStorage errors.
+    }
+  }, []);
 
   const from = location.state?.from?.pathname || '/dashboard';
 
@@ -39,10 +52,13 @@ const Login = () => {
       navigate(from, { replace: true });
     } catch (err) {
       setLocalError(
+        err.code === 'app/account-not-found'
+          ? 'No account found. Please create an account first.'
+          :
         err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password'
-          ? 'Invalid email or password.'
+          ? 'Invalid credentials. If you are new, please create an account first.'
           : err.code === 'auth/user-not-found'
-          ? 'No account with that email.'
+          ? 'No account found. Please create an account first.'
           : err.message || 'Login failed.'
       );
     } finally {
@@ -58,7 +74,11 @@ const Login = () => {
       navigate(from, { replace: true });
     } catch (err) {
       if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
-        setLocalError(err.message || 'Google Login failed.');
+        setLocalError(
+          err.code === 'app/account-not-found'
+            ? 'No account found. Please create an account first.'
+            : (err.message || 'Google Login failed.')
+        );
       }
     } finally {
       setLoadingGoogle(false);

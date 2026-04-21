@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
-import { Package, Plus, Trash2, CheckSquare, Square } from 'lucide-react';
+import { Package, Plus, Trash2, CheckSquare, Square, Edit3, Save, X } from 'lucide-react';
 import { useTripContext } from '../../context/TripContext';
-import { addPackingItem, togglePackingItem, deletePackingItem } from '../../services/trip.service';
+import { addPackingItem, togglePackingItem, updatePackingItem, deletePackingItem } from '../../services/trip.service';
 import Button from '../ui/Button';
 
 /**
@@ -13,6 +13,11 @@ const PackingList = () => {
   const [inputVal, setInputVal] = useState('');
   const [assignee, setAssignee] = useState('Group');
   const [adding, setAdding] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [busyItemId, setBusyItemId] = useState('');
+  const [editingId, setEditingId] = useState('');
+  const [editName, setEditName] = useState('');
+  const [editAssignee, setEditAssignee] = useState('Group');
   const inputRef = useRef(null); // useRef to manage focus without re-render
 
   const packedCount = packing.filter((p) => p.packed).length;
@@ -20,30 +25,116 @@ const PackingList = () => {
   const percentage = totalCount > 0 ? (packedCount / totalCount) * 100 : 0;
 
   const handleAdd = useCallback(async () => {
-    if (!inputVal.trim()) return;
+    const name = inputVal.trim();
+    const owner = assignee.trim() || 'Group';
+    if (!activeTrip?.id) return;
+    if (!name) {
+      setFormError('Item name is required.');
+      return;
+    }
+    const duplicate = packing.some(
+      (p) => p.name?.trim().toLowerCase() === name.toLowerCase() && (p.assignee || 'Group').trim().toLowerCase() === owner.toLowerCase()
+    );
+    if (duplicate) {
+      setFormError('This item already exists for the same assignee.');
+      return;
+    }
+    setFormError('');
     setAdding(true);
     try {
       const ref = await addPackingItem(activeTrip.id, {
-        name: inputVal.trim(),
-        assignee,
+        name,
+        assignee: owner,
       });
-      setPacking((prev) => [...prev, { id: ref.id, name: inputVal.trim(), assignee, packed: false }]);
+      setPacking((prev) => [...prev, { id: ref.id, name, assignee: owner, packed: false }]);
       setInputVal('');
+      setAssignee('Group');
       // Use ref to return focus to input — avoids re-render
       setTimeout(() => inputRef.current?.focus(), 50);
+    } catch (err) {
+      setFormError(err?.message || 'Failed to add item.');
     } finally {
       setAdding(false);
     }
-  }, [inputVal, assignee, activeTrip, setPacking]);
+  }, [inputVal, assignee, activeTrip, packing, setPacking]);
 
   const handleToggle = async (item) => {
-    await togglePackingItem(activeTrip.id, item.id, !item.packed);
-    setPacking((prev) => prev.map((p) => p.id === item.id ? { ...p, packed: !p.packed } : p));
+    if (!activeTrip?.id) return;
+    const nextPacked = !item.packed;
+    setBusyItemId(item.id);
+    // Optimistic update with rollback on failure
+    setPacking((prev) => prev.map((p) => p.id === item.id ? { ...p, packed: nextPacked } : p));
+    try {
+      await togglePackingItem(activeTrip.id, item.id, nextPacked);
+    } catch (err) {
+      setPacking((prev) => prev.map((p) => p.id === item.id ? { ...p, packed: item.packed } : p));
+      setFormError(err?.message || 'Failed to update item.');
+    } finally {
+      setBusyItemId('');
+    }
   };
 
   const handleDelete = async (item) => {
-    await deletePackingItem(activeTrip.id, item.id);
-    setPacking((prev) => prev.filter((p) => p.id !== item.id));
+    if (!activeTrip?.id) return;
+    if (!window.confirm(`Delete "${item.name}" from ${item.assignee || 'Group'}?`)) return;
+    setBusyItemId(item.id);
+    try {
+      await deletePackingItem(activeTrip.id, item.id);
+      setPacking((prev) => prev.filter((p) => p.id !== item.id));
+      if (editingId === item.id) {
+        setEditingId('');
+        setEditName('');
+        setEditAssignee('Group');
+      }
+    } catch (err) {
+      setFormError(err?.message || 'Failed to delete item.');
+    } finally {
+      setBusyItemId('');
+    }
+  };
+
+  const startEdit = (item) => {
+    setFormError('');
+    setEditingId(item.id);
+    setEditName(item.name || '');
+    setEditAssignee(item.assignee || 'Group');
+  };
+
+  const cancelEdit = () => {
+    setEditingId('');
+    setEditName('');
+    setEditAssignee('Group');
+  };
+
+  const saveEdit = async (item) => {
+    const name = editName.trim();
+    const owner = editAssignee.trim() || 'Group';
+    if (!activeTrip?.id) return;
+    if (!name) {
+      setFormError('Item name is required.');
+      return;
+    }
+    const duplicate = packing.some(
+      (p) =>
+        p.id !== item.id &&
+        p.name?.trim().toLowerCase() === name.toLowerCase() &&
+        (p.assignee || 'Group').trim().toLowerCase() === owner.toLowerCase()
+    );
+    if (duplicate) {
+      setFormError('Another item with same name/assignee already exists.');
+      return;
+    }
+
+    setBusyItemId(item.id);
+    try {
+      await updatePackingItem(activeTrip.id, item.id, { name, assignee: owner });
+      setPacking((prev) => prev.map((p) => (p.id === item.id ? { ...p, name, assignee: owner } : p)));
+      cancelEdit();
+    } catch (err) {
+      setFormError(err?.message || 'Failed to save changes.');
+    } finally {
+      setBusyItemId('');
+    }
   };
 
   const handleKeyDown = (e) => {
@@ -57,6 +148,15 @@ const PackingList = () => {
     acc[key].push(item);
     return acc;
   }, {});
+  const sortedGroups = Object.entries(grouped)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([person, items]) => [
+      person,
+      [...items].sort((x, y) => {
+        if (x.packed !== y.packed) return Number(x.packed) - Number(y.packed);
+        return (x.name || '').localeCompare(y.name || '');
+      })
+    ]);
 
   return (
     <div className="pack-wrap animate-fade-in">
@@ -88,6 +188,11 @@ const PackingList = () => {
       )}
 
       {/* Add Item */}
+      {formError && (
+        <div className="pack-error" role="alert">
+          {formError}
+        </div>
+      )}
       <div className="pack-add-row">
         <input
           ref={inputRef}
@@ -98,14 +203,17 @@ const PackingList = () => {
           placeholder="Add an item (press Enter)..."
           id="packing-input"
           style={{ flex: 1 }}
+          disabled={adding}
         />
         <input
           value={assignee}
-          onChange={(e) => setAssignee(e.target.value)}
+          onChange={(e) => { setFormError(''); setAssignee(e.target.value); }}
           className="form-input"
           placeholder="Assignee"
           style={{ maxWidth: 140 }}
           id="packing-assignee"
+          onKeyDown={handleKeyDown}
+          disabled={adding}
         />
         <Button variant="primary" size="sm" icon={Plus} loading={adding} onClick={handleAdd} id="packing-add-btn">
           Add
@@ -119,7 +227,7 @@ const PackingList = () => {
           <p>Start building your packing checklist</p>
         </div>
       ) : (
-        Object.entries(grouped).map(([person, items]) => (
+        sortedGroups.map(([person, items]) => (
           <div key={person} className="pack-group">
             <p className="pack-group-label">
               {person}
@@ -133,13 +241,46 @@ const PackingList = () => {
                     onClick={() => handleToggle(item)}
                     id={`pack-toggle-${item.id}`}
                     aria-label={item.packed ? 'Unpack item' : 'Pack item'}
+                    disabled={busyItemId === item.id}
                   >
                     {item.packed ? <CheckSquare size={18} color="var(--teal-400)" /> : <Square size={18} />}
                   </button>
-                  <span className="pack-name">{item.name}</span>
-                  <button className="icon-btn danger" onClick={() => handleDelete(item)} id={`pack-del-${item.id}`}>
-                    <Trash2 size={13} />
-                  </button>
+                  {editingId === item.id ? (
+                    <>
+                      <input
+                        value={editName}
+                        onChange={(e) => { setFormError(''); setEditName(e.target.value); }}
+                        className="form-input"
+                        style={{ maxWidth: 280 }}
+                        placeholder="Item name"
+                        disabled={busyItemId === item.id}
+                      />
+                      <input
+                        value={editAssignee}
+                        onChange={(e) => { setFormError(''); setEditAssignee(e.target.value); }}
+                        className="form-input"
+                        style={{ maxWidth: 140 }}
+                        placeholder="Assignee"
+                        disabled={busyItemId === item.id}
+                      />
+                      <button className="icon-btn" onClick={() => saveEdit(item)} disabled={busyItemId === item.id} id={`pack-save-${item.id}`}>
+                        <Save size={13} />
+                      </button>
+                      <button className="icon-btn" onClick={cancelEdit} disabled={busyItemId === item.id} id={`pack-cancel-${item.id}`}>
+                        <X size={13} />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="pack-name">{item.name}</span>
+                      <button className="icon-btn" onClick={() => startEdit(item)} id={`pack-edit-${item.id}`} disabled={busyItemId === item.id}>
+                        <Edit3 size={13} />
+                      </button>
+                      <button className="icon-btn danger" onClick={() => handleDelete(item)} id={`pack-del-${item.id}`} disabled={busyItemId === item.id}>
+                        <Trash2 size={13} />
+                      </button>
+                    </>
+                  )}
                 </div>
               ))}
             </div>
@@ -149,6 +290,14 @@ const PackingList = () => {
 
       <style>{`
         .pack-wrap { display: flex; flex-direction: column; gap: 1.25rem; }
+        .pack-error {
+          background: rgba(239,68,68,0.1);
+          border: 1px solid rgba(239,68,68,0.25);
+          border-radius: var(--radius-md);
+          padding: 0.7rem 0.9rem;
+          color: var(--coral-400);
+          font-size: 0.84rem;
+        }
         .pack-add-row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
         .pack-group { }
         .pack-group-label {
