@@ -12,7 +12,7 @@ A React-based travel planning platform that helps users plan, collaborate, and m
 
 ## Live Deployed Link
 
-- [https://safarsang-9e997.web.app](https://safarsang-9e997.web.app)
+- https://safar-sang.vercel.app
 
 ## Problem Statement
 
